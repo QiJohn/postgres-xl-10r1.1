@@ -1,0 +1,46 @@
+函数原型为：pgxc_node_send_query(PGXCNodeHandle *handle, const char *query)
+
+其中一种调用关系如下所示：
+	main (argc=8, argv=0x272eb30) at main.c:228
+		->PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		->ServerLoop () at postmaster.c:1857
+		->BackendStartup (port=0x2756870) at postmaster.c:4300
+		->BackendRun (port=0x2756870) at postmaster.c:4628
+		->PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		->exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		->PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, ltdest=0x27e15e8,completionTag=0x7fff7aa66840 "") at query.c:1152
+
+		->PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,completionTag=0x7fff7aa66840 "") at pquery.c:1818
+
+		->ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,completionTag=0x7fff7aa66840 "") at pquery.c:174
+
+		->ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:162
+		->standard_ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:312
+		->InitPlan (queryDesc=0x275afb0, eflags=0) at execMain.c:1103
+		->ExecInitNode (node=0x275a3d8, estate=0x2841880, eflags=0) at execProcnode.c:177
+		->ExecInitModifyTable (node=0x275a3d8, estate=0x2841880, eflags=0) at nodeModifyTable.c:1916
+		->ExecInitNode (node=0x275a550, estate=0x2841880, eflags=0) at execProcnode.c:378
+			【递归初始化plan中以node=0x275a550为根节点的所有节点】
+		->ExecInitRemoteSubplan (node=0x275a550, estate=0x2841880, eflags=0) at execRemote.c:5637
+			【query执行期间初始化RemoteSubplan节点】
+		->ExecFinishInitRemoteSubplan (node=0x2842500) at execRemote.c:5743
+			【获取datanode、coordinate的连接，调用函数pgxc_node_begin、pgxc_node_send_timestamp、pgxc_node_send_snapshot、pgxc_node_send_cmd_id、pgxc_node_send_plan实现将subplan下发给远端node】
+			->pgxc_node_begin (conn_count=1, connections=0x7fff7aa65d98, gxid=662156, need_tran_block=1 '\001', readOnly=1 '\001', node_type=68 'D')
+				【针对各个Datanode和Coordinator，通过函数pgxc_node_send_gxid发送GXID；pgxc_node_send_timestamp发送timestamp；pgxc_node_send_query(connections[i], "BEGIN")发送BEGIN命令；以及向远端node发送设置coordinator_lxid的数据报文】
+				->pgxc_node_set_query (handle=0x280cea8, set_query=0x274e6a0 "SET LOCAL coordinator_lxid TO \"30\";") at pgxcnode.c:2869
+					【在函数pgxc_node_set_query中，会将“set_query”存储的内容下发到远端的Node，并等待返回ReadyForQuery或ErrorResponse，且忽略其它返回信息】
+					->pgxc_node_send_query (handle=0x280cea8, query=0x274e6a0 "SET LOCAL coordinator_lxid TO \"30\";") at pgxcnode.c:1827
+						->pgxc_node_send_query_internal(handle=0x280cea8, query=0x274e6a0 "SET LOCAL coordinator_lxid TO \"30\";") at pgxcnode.c:1767
+							【在函数pgxc_node_send_query_internal中，将“query”内容组装到postgresql扩展协议报文数据中，报文标识为“Q”，并将该报文下发到远端的node中】
+
+				->pgxc_node_send_gxid (handle=0x280cea8, gxid=662156) at pgxcnode.c:1837
+					【将gxid(全局事务ID)组装到postgresql扩展协议报文数据中，报文标识为“g”，并将该报文下发到远端的node中】
+				->pgxc_node_send_timestamp (handle=0x280cea8, timestamp=715681822451549) at pgxcnode.c:1959
+					【将timestamp组装到postgresql扩展协议报文数据中，报文标识为“t”，并将该报文下发到远端的node中】
+				->pgxc_node_send_query (handle=0x280cea8, query=0xc4186b "BEGIN") at pgxcnode.c:1827
+					【在函数pgxc_node_send_query_internal中，将“query”内容"BEGIN"组装到postgresql扩展协议报文数据中，报文标识为“Q”，并将该报文下发到远端的node中】
+
+
+
+
+
