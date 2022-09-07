@@ -1,0 +1,44 @@
+1、在执行器Executor启动阶段，即执行ExecutorStart，postgres-xl会涉及的函数如下所示：
+#ifdef PGXC
+		case T_RemoteQuery:
+			result = (PlanState *) ExecInitRemoteQuery((RemoteQuery *) node, estate, eflags);
+			break;
+#endif
+
+#ifdef XCP
+		case T_RemoteSubplan:
+			result = (PlanState *) ExecInitRemoteSubplan((RemoteSubplan *) node, estate, eflags);
+			break;
+#endif
+
+
+
+
+
+2、在执行器Executor执行阶段，即执行ExecutorRun，postgres-xl会涉及的函数如下所示：
+（1）针对RemoteQuery情况下，设置执行函数ExecRemoteQuery
+		combiner->ss.ps.ExecProcNode = ExecRemoteQuery;
+
+（2）针对RemoteSubplan情况下，设置执行函数ExecRemoteSubplan
+		combiner->ss.ps.ExecProcNode = ExecRemoteSubplan;
+
+
+
+
+
+3、在执行器Executor执行结束阶段，即执行ExecutorRun，postgres-xl会涉及的函数如下所示：
+#ifdef PGXC
+		case T_RemoteQueryState:
+			ExecEndRemoteQuery((RemoteQueryState *) node);
+			break;
+#endif
+
+#ifdef XCP
+		case T_RemoteSubplanState:
+			ExecEndRemoteSubplan((RemoteSubplanState *) node);
+			break;
+#endif
+
+
+
+
