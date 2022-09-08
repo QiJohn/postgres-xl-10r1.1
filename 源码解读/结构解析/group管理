@@ -1,0 +1,31 @@
+（1）在postgres-xl的表空间中，会创建一张表用于存储group的相关信息，如下所示：
+	postgres=# select * from pg_catalog.pgxc_group ;
+	group_name | group_members
+	------------+---------------
+	(0 rows)
+	该表在程序中对应的结构体和变量存储在文件“src/include/catalog/pgxc_group.h”中
+
+
+
+
+
+（2）在“src/backend/utils/cache/lsyscache.c”定义了一系列的方法用于获取group的属性值
+	1、依据group的name获取group的oid值：Oid get_pgxc_groupoid(const char *groupname)
+
+	2、依据group的oid获取group的name：char *get_pgxc_groupname(Oid groupid)
+
+	3、依据group的oid获取group中各成员的oid：int get_pgxc_groupmembers(Oid groupid, Oid **members)
+
+
+
+
+
+（3）在“src/backend/pgxc/nodemgr/groupmgr.c”定义了一系列的方法用于支持操作pg_catalog下的pgxc_group；
+	1、创建一个PGXC  node group：void PgxcGroupCreate(CreateGroupStmt *stmt)
+
+	2、删除一个PGXC node group：void PgxcGroupRemove(DropGroupStmt *stmt)
+
+
+
+
+
