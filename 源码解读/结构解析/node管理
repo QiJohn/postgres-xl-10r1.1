@@ -1,0 +1,70 @@
+（1）在postgres-xl的表空间中，会创建一张表用于存储node的相关信息，如下所示：
+	postgres=# select * from pg_catalog.pgxc_node ;
+	node_name  | node_type | node_port | node_host | nodeis_primary | nodeis_preferred |   node_id
+	-------------+------------+------------+------------+-----------------+-------------------+-------------
+	coord1         | C               |      5432      | localhost   | f                         | f                           |  1885696643
+	coord2         | C               |      5431      | localhost   | f                         | f                           | -1197102633
+	datanode_1  | D              |     15432     | localhost   | f                         | f                           |  -675012441
+	datanode_2  | D              |     15433     | localhost   | f                         | f                           | -1047623914
+	(4 rows)
+	该表在程序中对应的结构体和变量存储在文件“src/include/catalog/pgxc_node.h”中
+
+
+
+
+（2）在“src/backend/pgxc/nodemgr/nodemgr.c”定义了一系列的方法用于支持操作pg_catalog下的pgxc_node；
+	支持对于node对象的CREATE/ALTER/DROP等操作。
+	1、初始化CN、DN表的共享内存：void NodeTablesShmemInit(void)
+
+	2、获取定义node的共享内存大小：Size NodeTablesShmemSize(void)
+
+	3、检查node选项并返回填充值：static void check_node_options(const char *node_name, List *options, char **node_host,
+				int *node_port, char *node_type, bool *is_primary, bool *is_preferred)
+
+	4、依据node_name生成node的hash值：static Datum generate_node_id(const char *node_name)
+
+	5、比较两个 XC 节点的 Oid，按名称升序排序：static int cmp_nodes(const void *p1, const void *p2)
+
+	6、分别获取配置的CN、DN节点数目：static void count_coords_datanodes(Relation rel, int *num_coord, int *num_dns)
+
+	7、依据pg_catalog中内容更新共享内存中表的定义：void PgxcNodeListAndCount(void)
+
+	8、获取DN、CN的OID值，对应的数量以及是否更新primary节点信息：void PgxcNodeGetOids(Oid **coOids, Oid **dnOids,
+				int *num_coords, int *num_dns, bool update_preferred)
+
+	9、获取DN、CN的OID值以及对应的数量：void PgxcNodeGetHealthMap(Oid *coOids, Oid *dnOids, int *num_coords,
+				int *num_dns, bool *coHealthMap, bool *dnHealthMap)
+
+	10、查询共享内存 NodeDefinition 结构并获取 nodeishealthy 值并将其返回：void PgxcNodeDnListHealth(List *nodeList, bool *healthmap)
+
+	11、获取共享内存中node定义的副本：NodeDefinition *PgxcNodeGetDefinition(Oid node)
+
+	12、更新共享内存中node健康状态信息：bool PgxcNodeUpdateHealth(Oid node, bool status)
+
+	13、添加一个PGXC node：void PgxcNodeCreate(CreateNodeStmt *stmt)
+
+	14、修改一个PGXC node：void PgxcNodeAlter(AlterNodeStmt *stmt)
+
+	15、删除一个PGXC node：void PgxcNodeRemove(DropNodeStmt *stmt)
+
+
+
+
+
+（3）在“src/backend/utils/cache/lsyscache.c”定义了一系列的方法用于获取node的属性值
+	1、依据node的name获取node的oid值：Oid get_pgxc_nodeoid(const char *nodename)
+
+	2、依据node的oid获取node的name：char *get_pgxc_nodename(Oid nodeid)
+
+	3、依据node的oid获取node的id值：uint32 get_pgxc_node_id(Oid nodeid)
+
+	4、依据node的oid获取node的type：char get_pgxc_nodetype(Oid nodeid)
+
+	5、依据node的oid获取node的port：int get_pgxc_nodeport(Oid nodeid)
+
+	6、依据node的oid获取node的host：char *get_pgxc_nodehost(Oid nodeid)
+
+	7、确定该node是否是首先节点：bool is_pgxc_nodepreferred(Oid nodeid)
+
+	8、确定该node是否是主节点：bool is_pgxc_nodeprimary(Oid nodeid)
+
