@@ -42,5 +42,7 @@
 
 
 
+总结：执行器执行的过程中（ExecutorStart、ExecutorRun）会与远端node进行基于postgres的扩展协议的数据通信，从而完成sql操作。
+
 
 
