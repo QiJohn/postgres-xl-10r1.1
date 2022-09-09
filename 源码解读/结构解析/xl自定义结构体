@@ -70,7 +70,7 @@
 		int 	   *dest_nodes;				/* allocate once */
 		List	   *execNodes;				/* where to execute subplan should query be executed on all (true) or any (false) node specified in the execNodes list */
 		bool 		execOnAll;
-		int			nParamRemote;	/* number of params sent from the master node */
+		int			nParamRemote;	    /* number of params sent from the master node */
 		RemoteParam *remoteparams;  /* parameter descriptors */
 	} RemoteSubplanState;
 
