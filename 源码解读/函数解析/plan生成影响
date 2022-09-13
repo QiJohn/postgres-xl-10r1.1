@@ -1,0 +1,105 @@
+1、================对函数”create_unique_plan“的影响
+/*
+ * create_unique_plan
+ *	  Create a Unique plan for 'best_path' and (recursively) plans for its subpaths.
+ *
+ *	  Returns a Plan node.
+ */
+static Plan *create_unique_plan(PlannerInfo *root, UniquePath *best_path, int flags)
+{
+	.......
+#ifdef XCP
+		/*
+		 * RemoteSubplan is conditionally projection capable - it is pushing projection to the data nodes
+		 */
+		if (IsA(subplan, RemoteSubplan))
+			subplan->lefttree->targetlist = newtlist;
+#endif
+	.......
+}
+
+调用”create_unique_plan“的函数有：create_plan_recurse、
+
+
+
+2、================新增加函数”create_remotescan_plan“
+/*
+ * create_remotescan_plan
+ *	  Create a RemoteSubquery plan for 'best_path' and (recursively) plans for its subpaths.
+ *
+ *	  Returns a Plan node.
+ */
+static RemoteSubplan *create_remotescan_plan(PlannerInfo *root,   RemoteSubPath *best_path)
+{
+	RemoteSubplan  *plan;
+	Plan	   	   *subplan;
+	Bitmapset  	   *saverestrict;
+	Path		   *subpath = best_path->subpath;
+	List		   *pathkeys = best_path->path.pathkeys;
+	int 			numsortkeys;
+	AttrNumber	   *sortColIdx;
+	Oid			   *sortOperators;
+	Oid			   *collations;
+	bool		   *nullsFirst;
+
+	/*
+	 * Subsequent code will modify current restriction, it needs to be restored
+	 * so other path nodes in the outer tree could see correct value.
+	 */
+	saverestrict = root->curOuterRestrict;
+
+	adjust_subplan_distribution(root, best_path->path.distribution,	subpath->distribution);
+
+	/* We don't want any excess columns in the remote tuples */
+	subplan = create_plan_recurse(root, subpath, CP_SMALL_TLIST);
+
+	.......
+
+	plan = make_remotesubplan(root, subplan, best_path->path.distribution, best_path->subpath->distribution, best_path->path.pathkeys);
+
+	.......
+}
+
+调用”create_remotescan_plan“的函数有：create_plan_recurse
+
+
+3、================新增加函数”make_remotesubplan“
+/*
+*创建RemoteSubplan节点，在远程节点上执行子计划。
+*leftree：我们要下推到远程节点的子计划。
+*resultDistribution：远程结果的分布。可能为空，结果将到达调用节点。
+*execDistribution：确定子计划的源数据是如何分布的，我们应该将子计划发送到哪里，以及如何合并结果。
+*pathkeys：根据这些键对远程子计划进行排序，Executor应对传入的元组执行合并排序。
+*/
+RemoteSubplan *make_remotesubplan(PlannerInfo *root, Plan *lefttree, Distribution *resultDistribution, Distribution *execDistribution, List *pathkeys)
+{
+	RemoteSubplan *node = makeNode(RemoteSubplan);
+	Plan	   *plan = &node->scan.plan;
+	Bitmapset  *tmpset;
+	int			nodenum;
+
+	.........
+}
+
+调用”make_remotesubplan“的函数有：create_minmaxagg_plan、create_remotescan_plan、standard_planner、make_subplan、SS_process_ctes
+
+
+
+4、================函数”pgxc_FQS_planner“
+static PlannedStmt *pgxc_FQS_planner(Query *query, int cursorOptions, ParamListInfo boundParams)
+{
+	.........
+	exec_nodes = pgxc_is_query_shippable(query, 0);  //如果query不需要进行shipped，则直接返回，执行函数”standard_planner()“
+	if (exec_nodes == NULL)
+		return NULL;
+	.........
+
+	top_plan = (Plan *)pgxc_FQS_create_remote_plan(query, exec_nodes, false); //将query转发到datanode,同时创建RemoteQuery节点
+	.........
+}
+
+调用”pgxc_FQS_planner“的函数有：pgxc_planner
+
+
+
+
