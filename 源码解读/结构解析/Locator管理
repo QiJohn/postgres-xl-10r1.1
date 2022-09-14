@@ -6,6 +6,7 @@ redistribution as a part of ALTER TABLE command.
 
 
 
+
 1、===============src/backend/pgxc/locator/locator.c
 该文件提供基本特征，用于确定给定表的node是进行replicated还是distributed，即帮助管理表的locations信息，例如partitioning、replication信息。
 
@@ -24,6 +25,8 @@ redistribution as a part of ALTER TABLE command.
 		void	   *results; /* array to output results */
 	};
 	typedef struct _Locator Locator;
+
+
 
 
 （2）各函数及功能解析
@@ -51,15 +54,49 @@ redistribution as a part of ALTER TABLE command.
 
 	检查给定的locator信息的相等性：bool IsLocatorInfoEqual(RelationLocInfo *rel_loc_info1, RelationLocInfo *rel_loc_info2)
 
-	获取locator的分布类型：char ConvertToLocatorType(int disttype)
+	获取locator的类型(distribution type)，将表示类型的int转换成char：char ConvertToLocatorType(int disttype)
+
+	返回表的locator的类型：char GetLocatorType(Oid relid)
+
+	获取所有DN组成的list：List *GetAllDataNodes(void)
+	获取所有CN组成的list：List *GetAllCoordNodes(void)
+	获取当前正在正常运行的CN组成的list：List *GetAvailableCoordNodes(void)
+
+	构建与指定relation相关联的locator：void RelationBuildLocator(Relation rel)
+
+	在relcache中的RelationLocatorInfo结构的副本中返回relation的locator相关信息：RelationLocInfo *GetRelationLocInfo(Oid relid)
+
+	返回relation的分布类型(distribution type)：char GetRelationLocType(Oid relid)
+
+	拷贝RelationLocInfo结构体信息：RelationLocInfo *CopyRelationLocInfo(RelationLocInfo * src_info)
+	清除RelationLocInfo结构体信息：void FreeRelationLocInfo(RelationLocInfo *relationLocInfo)
+
+	释放 ExecNodes 表达式的内容：void FreeExecNodes(ExecNodes **exec_nodes)
+
+	构建或者释放locator：createLocator、freeLocator
+
+	计算hash、模命中值：locate_hash_select、locate_hash_insert、locate_modulo_insert、locate_modulo_select
+	获取locator信息：getLocatorResults、getLocatorNodeMap、getLocatorNodeCount
+	。。。。
 
 
 
 
 
+2、===============src/backend/pgxc/locator/redistrib.c
+该模块处理基于行的redistribution，作为ALTER TABLE操作的一部分。
 
+（1）各函数功能分析
+	在catalog更新后执行redistribution操作：void PGXCRedistribTable(RedistribState *distribState, RedistribCatalog type)
+	查找执行table redistribution所需要的命令列表：void PGXCRedistribCreateCommandList(RedistribState *distribState, RelationLocInfo *newLocInfo)
+	构建命令列表的入口点：static void pgxc_redist_build_entry(RedistribState *distribState,
+						RelationLocInfo *oldLocInfo,
+						RelationLocInfo *newLocInfo)
 
-
-
+	在给定的node列表上执行raw query：static void distrib_execute_query(char *sql, bool is_temp, ExecNodes *exec_nodes)
+	构建distribution的命令：RedistribCommand *makeRedistribCommand(RedistribOperation type, RedistribCatalog updateState, ExecNodes *nodes)
+	构建distribution的state算子：RedistribState *makeRedistribState(Oid relOid)
+	删除指定表的所有数据：static void distrib_truncate(RedistribState *distribState, ExecNodes *exec_nodes)
+	。。。。
 
 
