@@ -1,0 +1,65 @@
+Locator is a new module to Postgres-XC to determine target datanode for each statement, row
+or whole table. The source code is found at src/backend/pgxc/locator. The module consists
+of two source files, locator.c and redistrib.c. The former provide fundamental features to
+determine nodes over which given table is replicated or distributed. The latter handles row
+redistribution as a part of ALTER TABLE command.
+
+
+
+1、===============src/backend/pgxc/locator/locator.c
+该文件提供基本特征，用于确定给定表的node是进行replicated还是distributed，即帮助管理表的locations信息，例如partitioning、replication信息。
+
+（1）结构体”Locator“的信息
+	struct _Locator
+	{
+		int			(*locatefunc) (Locator *self, Datum value, bool isnull,	bool *hasprimary);  //Function returns number of node references written to the array.
+		Oid			dataType; 		/* values of that type are passed to locateNodes function */
+		LocatorListType listType;
+		bool		primary;
+		int			roundRobinNode; /* for LOCATOR_TYPE_RROBIN */
+		LocatorHashFunc	hashfunc; /* for LOCATOR_TYPE_HASH */
+		int 		valuelen; /* 1, 2 or 4 for LOCATOR_TYPE_MODULO */
+		int			nodeCount; /* How many nodes are in the map */
+		void	   *nodeMap; /* map index to node reference according to listType */
+		void	   *results; /* array to output results */
+	};
+	typedef struct _Locator Locator;
+
+
+（2）各函数及功能解析
+	获取”首选datanode“，即性能表现最好的节点：List *GetPreferredReplicationNode(List *relNodes)
+
+	获取任一datanode，但是”首选datanode“优先：int GetAnyDataNode(Bitmapset *nodes)
+
+	计算两个 64 位无符号值的模数：static int compute_modulo(uint64 numerator, uint64 denominator)
+
+	返回按照hash或模进行distribution的列名：char *GetRelationDistColumn(RelationLocInfo * rel_loc_info)
+
+	返回数据类型是否可以通过PG-XC进行hash分布：bool IsTypeHashDistributable(Oid col_type)
+
+	返回relation的hash分布列名：char *GetRelationHashColumn(RelationLocInfo * rel_loc_info)
+
+	返回relation是否用于hash或模分布：bool IsDistColumnForRelId(Oid relid, char *part_col_name)
+
+	返回数据类型是否可以通过PG-XC进行模分布：bool IsTypeModuloDistributable(Oid col_type)
+
+	返回relation的模分布列名：char *GetRelationModuloColumn(RelationLocInfo * rel_loc_info)
+
+	更新关系的循环节点：int GetRoundRobinNode(Oid relid)
+
+	表分发列表是否包含主节点：bool IsTableDistOnPrimary(RelationLocInfo *rel_loc_info)
+
+	检查给定的locator信息的相等性：bool IsLocatorInfoEqual(RelationLocInfo *rel_loc_info1, RelationLocInfo *rel_loc_info2)
+
+	获取locator的分布类型：char ConvertToLocatorType(int disttype)
+
+
+
+
+
+
+
+
+
+
+
