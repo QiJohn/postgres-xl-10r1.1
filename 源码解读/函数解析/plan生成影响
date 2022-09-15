@@ -107,6 +107,9 @@ static PlannedStmt *pgxc_FQS_planner(Query *query, int cursorOptions, ParamListI
 在函数“planner”中，如果是其它CN转发过来的query则直接执行函数“standard_planner”，否则执行函数“pgxc_planner”。
 	在函数“pgxc_planner”中，如果query可以被完整的ship，则直接执行函数“pgxc_FQS_planner”，否则执行“standard_planner”。
 		在函数“pgxc_FQS_planner”中，如果statement能够直接在DN上被完整评估，则直接return NULL；如果使用函数“pgxc_is_query_shippable”确认query不能被直接ship，则直接return NULL；接着执行函数pgxc_FQS_create_remote_plan对query进行ship以及创建RemoteQuery节点。
-	在函数“standard_planner”中，如果当前CN是本地CN且query为utilityStmt语句，则执行函数pgxc_direct_planner；接着执行函数“create_plan”；如果存在distribution，则执行“make_remotesubplan”。
+
+	在函数“standard_planner”中，如果当前CN是本地CN且query为utilityStmt语句，则执行函数pgxc_direct_planner；接着执行“subquery_planner-->preprocess_expression-->SS_process_sublinks-->process_sublinks_mutator-->make_subplan”；接着执行函数“create_plan”；如果存在distribution，则执行“make_remotesubplan”。
 		在函数“create_plan”中，使用函数“adjust_subplan_distribution”来确保subplan的distribution符合匹配要求；继续调用函数“create_plan_recurse”递归创建plan。
 			在函数“create_plan_recurse”中，如果存在类型“T_RemoteSubplan”执行“create_remotescan_plan”；如果存在“T_Unique”则执行“create_unique_plan”。
+
+		在函数“make_subplan”中，执行函数“create_plan”；如果存在distribution，则执行“make_remotesubplan”；执行函数“build_subplan”；如果IS_PGXC_LOCAL_COORDINATOR为真，只需要一个plan，直接返回。
