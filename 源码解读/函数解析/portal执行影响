@@ -1,0 +1,44 @@
+1、================PortalStart
+	在函数“PortalStart”中针对XL，会从“portal->stmts”中获取“portal”采用的strategy类型，如果该策略的类型为“PORTAL_DISTRIBUTED”时，则执行以下步骤：
+		第一步：设置snapshot
+		第二步：调用函数“CreateQueryDesc”创建当前“portal”的QueryDesc，同时设置目的node
+		第三步：当“parent node”已经下发了parameters，且至少一个是PARAM_EXEC时，我们需要避免“single execution”模式。
+			第一步：如果子计划在执行计划树中有更多的RemoteSubplan 节点，多次执行RemoteSubplan 可能会导致SharedQueue 的名称冲突，因此需要使用函数“RemoteSubplanMakeUnique”使他们unique；
+			第二步：调用函数“ExecutorStart”为execution准备plan；
+			第三步：调用函数“createLocator”创建locator；
+			第四步：调用函数“CreateDestReceiver”创建适用于dest的函数集合接收器；
+			第五步：调用函数“SetProducerDestReceiverParams”设置“locator”和“函数集合接收器”
+		第四步：当不满足条件(“parent node”已经下发了parameters，且至少一个是PARAM_EXEC)时，进行分布式数据请求。
+			第一步：调用函数“SharedQueueBind”为数据交换绑定“shared queue”；
+			第二步：判断不需要初始化“executor”，则直接获取“tuple descriptor”；
+			第三步：判断需要初始化“executor”。
+				第一步：调用函数“ExecutorStart”为execution准备plan；
+				第二步：调用函数“createLocator”创建locator；
+				第三步：调用函数“CreateDestReceiver”创建适用于dest的函数集合接收器；
+				第四步：调用函数“SetProducerDestReceiverParams”设置“locator”和“函数集合接收器”；
+		第五步：设置"portal"的queryDesc、tupDesc等参数
+
+
+
+
+
+
+2、================PortalRun
+	在函数“PortalEnd”中针对XL，会获取“portal->strategy”的类型，如果该策略的类型为“PORTAL_DISTRIBUTED”时，则执行以下步骤：
+	第一步：判断本地“subplan”是否正在生成数据以及通过squeue进行分发
+		是：
+			判断共享内存queue是否给其它node发送数据
+				是：
+					确保“producer”推进，即执行指定的portal‘s query，并将结果tuple分发给consumers。
+				否：
+					第一步：调用函数“SetSelfConsumerDestReceiver”，设置DestReceiver以接收tuple；
+					第二步：调用函数“PortalRunSelect”，执行"portal"的query，获取处理的行数；
+					第三步：继续调用函数“SetSelfConsumerDestReceiver”，设置DestReceiver以接收tuple；
+
+		否：(跳过了plan的初始化)
+			第一步：调用函数“MakeSingleTupleTableSlot”构建独立的slot接收tuples；
+			第二步：执行循环，获取queue中的tuple数据，当tuple为NULL后，遍历“producing portals”，调用函数“AdvanceProducingPortal”执行portal中的query以及将结果分发给consumers；
+			第三步：通过动态调用函数“(*dest->rShutdown) (dest)”销毁数据接收器；
+			第四步：调用函数“ExecDropSingleTupleTableSlot”释放使用 MakeSingleTupleTableSlot 制作的 TupleTableSlot。
+
+
