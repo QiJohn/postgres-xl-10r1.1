@@ -1,5 +1,6 @@
 1、================PortalStart
-	在函数“PortalStart”中针对XL，会从“portal->stmts”中获取“portal”采用的strategy类型，如果该策略的类型为“PORTAL_DISTRIBUTED”时，则执行以下步骤：
+	在函数“PortalStart”中针对XL，会从“portal->stmts”中获取“portal”采用的strategy类型，
+	如果该策略的类型为“PORTAL_DISTRIBUTED”时，则执行以下步骤：
 		第一步：设置snapshot
 		第二步：调用函数“CreateQueryDesc”创建当前“portal”的QueryDesc，同时设置目的node
 		第三步：当“parent node”已经下发了parameters，且至少一个是PARAM_EXEC时，我们需要避免“single execution”模式。
@@ -22,23 +23,44 @@
 
 
 
-
 2、================PortalRun
-	在函数“PortalEnd”中针对XL，会获取“portal->strategy”的类型，如果该策略的类型为“PORTAL_DISTRIBUTED”时，则执行以下步骤：
-	第一步：判断本地“subplan”是否正在生成数据以及通过squeue进行分发
-		是：
-			判断共享内存queue是否给其它node发送数据
-				是：
-					确保“producer”推进，即执行指定的portal‘s query，并将结果tuple分发给consumers。
-				否：
-					第一步：调用函数“SetSelfConsumerDestReceiver”，设置DestReceiver以接收tuple；
-					第二步：调用函数“PortalRunSelect”，执行"portal"的query，获取处理的行数；
-					第三步：继续调用函数“SetSelfConsumerDestReceiver”，设置DestReceiver以接收tuple；
+	在函数“PortalEnd”中针对XL，会获取“portal->strategy”的类型，
+	如果该策略的类型为“PORTAL_DISTRIBUTED”时，则执行以下步骤：
+		第一步：判断本地“subplan”是否正在生成数据以及通过squeue进行分发
+			是：
+				判断共享内存queue是否给其它node发送数据
+					是：
+						确保“producer”推进，即执行指定的portal‘s query，并将结果tuple分发给consumers。
+					否：
+						第一步：调用函数“SetSelfConsumerDestReceiver”，设置DestReceiver以接收tuple；
+						第二步：调用函数“PortalRunSelect”，执行"portal"的query，获取处理的行数；
+						第三步：继续调用函数“SetSelfConsumerDestReceiver”，设置DestReceiver以接收tuple；
 
-		否：(跳过了plan的初始化)
-			第一步：调用函数“MakeSingleTupleTableSlot”构建独立的slot接收tuples；
-			第二步：执行循环，获取queue中的tuple数据，当tuple为NULL后，遍历“producing portals”，调用函数“AdvanceProducingPortal”执行portal中的query以及将结果分发给consumers；
-			第三步：通过动态调用函数“(*dest->rShutdown) (dest)”销毁数据接收器；
-			第四步：调用函数“ExecDropSingleTupleTableSlot”释放使用 MakeSingleTupleTableSlot 制作的 TupleTableSlot。
+			否：(跳过了plan的初始化)
+				第一步：调用函数“MakeSingleTupleTableSlot”构建独立的slot接收tuples；
+				第二步：执行循环，获取queue中的tuple数据，当tuple为NULL后，遍历“producing portals”，调用函数“AdvanceProducingPortal”执行portal中的query以及将结果分发给consumers；
+				第三步：通过动态调用函数“(*dest->rShutdown) (dest)”销毁数据接收器；
+				第四步：调用函数“ExecDropSingleTupleTableSlot”释放使用 MakeSingleTupleTableSlot 制作的 TupleTableSlot。
+
+	如果该策略的类型为“PORTAL_MULTI_QUERY”时，则执行以下步骤：
+		第一步：调用函数“PortalRunMulti”执行一般情况下(多query或者非SELECT-like query)的portal's query。
+			第一步：针对XL增加定义“Combines”的变量，用于存储执行结果的组合数据
+			第二步：循环处理“portal->stmts”中的每个“PlannedStmt”
+				如果是非utilityStmt，则执行函数“ProcessQuery”，在该函数中执行如下步骤：
+					第一步：依次执行函数“CreateQueryDesc、ExecutorStart、ExecutorRun、ExecutorFinish”
+					第二步：针对“RemoteQuery”且“IS_PGXC_COORDINATOR”为真，更新coordinator的统计信息
+						如果commandType为“CMD_INSERT”，则调用函数“pgstat_count_remote_insert”对远端DN上的insert操作进行统计；
+						如果commandType为“CMD_UPDATE”，则调用函数“pgstat_count_remote_update”对远端DN上的update操作进行统计；
+						如果commandType为“CMD_UPDATE”，则调用函数“pgstat_count_remote_delete”对远端DN上的delete操作进行统计；
+					第三步：依次执行函数“ExecutorEnd、FreeQueryDesc”
+				如果是utilityStmt，则执行函数“PortalRunUtility”
+		第二步：调用函数“MarkPortalDone”将“portal”的状态由ACTIVE转化为DONE。
+
+
+3、================PortalDrop
+	在函数“PortalDrop”中针对XL，会执行下列步骤：
+		第一步：调用函数“portalIsProducing”
+
+
 
 
