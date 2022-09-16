@@ -65,5 +65,23 @@
 			#endif
 
 
+4、在最后一此执行函数“ExecutorRun”后，需要执行函数“ExecutorFinish”进行清理。在“ExecutorFinish”中调用“standard_ExecutorFinish”。
+	在“standard_ExecutorFinish”中，调用函数“ExecPostprocessPlan-->ExecProcNode”。（函数“ExecPostprocessPlan”在shutdown之前给plan node最后一次执行机会）
+		函数“ExecProcNode”的源码如下所示：
+			static inline TupleTableSlot *ExecProcNode(PlanState *node){
+				if (node->chgParam != NULL) /* something changed? */
+					ExecReScan(node);		/* let ReScan handle this */
 
+				return node->ExecProcNode(node); //针对RemoteQuery情况下，执行函数“ExecRemoteQuery”；针对RemoteSubplan情况下，执行函数“ExecRemoteSubplan”
+			}
+
+			在“ExecReScan”中针对XL，如果节点类型为“T_RemoteSubplanState”，则执行“ExecReScanRemoteSubplan”；如果节点类型为“T_RemoteQueryState”，则执行“ExecReScanRemoteQuery”。
+				#ifdef PGXC
+					case T_RemoteSubplanState:
+						ExecReScanRemoteSubplan((RemoteSubplanState *) node);
+						break;
+					case T_RemoteQueryState:
+						ExecReScanRemoteQuery((RemoteQueryState *) node);
+						break;
+				#endif
 
