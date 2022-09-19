@@ -1,0 +1,100 @@
+FQS用以判断query是否可以被完整的ship到远端node以及进行ship，本质上是为了避免所有的计划构造都出现在CN上。
+涉及FQS的文件有“pgxcship.c”和“planner.c”
+
+
+（1）================对pgxcship.c文件进行解析
+该文件所在的路径为“src/backend/optimizer/util/pgxcship.c”，用于“评估query或expression是否可以ship”
+	1、定义的结构体
+		1.1、定义结构体“Shippability_context”
+			该结构体由“Fast Query Shipping walker”使用，用于给“Fast Query Shipping”分析query收集信息
+			typedef struct{
+				bool		sc_for_expr;
+				Bitmapset	*sc_shippability;
+				Query		*sc_query;
+				int			sc_query_level;
+				int			sc_max_varlevelsup;
+				ExecNodes	*sc_exec_nodes;
+				ExecNodes	*sc_subquery_en;
+				bool		sc_groupby_has_distcol;
+			} Shippability_context;
+
+		1.2、定义结构体“ShippabilityStat”
+			该结构体作为原因list存在，用于表明“query”或“expression”不可被ship的原因
+			typedef enum{
+				SS_UNSHIPPABLE_EXPR = 0,	/
+				SS_NEED_SINGLENODE,
+				SS_NEEDS_COORD,
+				SS_VARLEVEL,
+				SS_NO_NODES,
+				SS_UNSUPPORTED_EXPR,
+				SS_HAS_AGG_EXPR,
+				SS_UNSHIPPABLE_TYPE,
+				SS_UNSHIPPABLE_TRIGGER,
+				SS_UPDATES_DISTRIBUTION_COLUMN
+			} ShippabilityStat;
+
+
+	2、定义的函数
+		在“Shippability_context”中设置query不可被ship的原因：static void pgxc_set_shippability_reason(Shippability_context *context, ShippabilityStat reason)
+
+		重新设置query不可被ship的原因：static void pgxc_reset_shippability_reason(Shippability_context *context, ShippabilityStat reason)
+
+		测试给定“reason”是否是query不可被ship的原因：static bool pgxc_test_shippability_reason(Shippability_context *context, ShippabilityStat reason)
+
+		针对给定的“RangeTblRef”查找对应的DN：static ExecNodes *pgxc_FQS_datanodes_for_rtr(Index varno, Query *query)
+
+		递归查找以给定节点为root的”From Expr“的子树是否是可推的，如果可以返回这些DN：static ExecNodes *pgxc_FQS_find_datanodes_recurse(Node *node, Query *query, Bitmapset **relids)
+
+		获取query被ship到的node组成的list：static ExecNodes *pgxc_FQS_find_datanodes(Query *query)
+
+		获取“ExecNodes”结构体，用于决定query应该在哪个node上执行：static ExecNodes *pgxc_FQS_get_relation_nodes(RangeTblEntry *rte, Index varno, Query *query)
+
+		遍历在指定node路由的查询/表达式树，收集有助于确定该节点所属的查询是否可发送到 Datanodes 的信息：static bool pgxc_shippability_walker(Node *node, Shippability_context *sc_context)
+
+		检查query进行评估时是否需要coordinator参与，或者可以在coordinator上完全评估：static bool pgxc_query_needs_coord(Query *query)
+
+		检查给定的var是否是分发键：static bool pgxc_is_var_distrib_column(Var *var, List *rtable)
+
+		返回 rtable（及其子查询）是否仅包含 pg_catalog 条目：static bool pgxc_query_contains_only_pg_catalog(List *rtable)
+
+		此函数调用查询遍历器来分析查询以收集信息，根据收集到的信息，它决定是否可以直接在 DN上执行查询，而不涉及 Coordinator：ExecNodes *pgxc_is_query_shippable(Query *query, int query_level)
+
+		检查给定的expression是否可以ship到DN：bool pgxc_is_expr_shippable(Expr *node, bool *has_aggs)
+
+		确定function是否可以被ship：static bool pgxc_is_func_shippable(Oid funcid)
+
+		检查给定relations的等值join条件：static Expr *pgxc_find_dist_equijoin_qual(Relids varnos_1, Relids varnos_2, Oid distcol_type, Node *quals, List *rtable)
+
+		将两个传递的 exec_node 组合起来，使得生成的 exec_node 对应于各个关系的 JOIN：static ExecNodes *pgxc_merge_exec_nodes(ExecNodes *en1, ExecNodes *en2)
+
+		join表达式是否可ship：static ExecNodes *pgxc_is_join_shippable(ExecNodes *inner_en, ExecNodes *outer_en, Relids in_relids,
+						Relids out_relids, JoinType jointype, List *join_quals, List *rtables)
+
+		。。。。
+
+
+
+
+
+（2）================对planner.c文件进行解析
+该文件所在的路径为“src/backend/pgxc/plan/planner.c”，该文件提供生成XL需要的plan
+	1、FQS的执行流程
+		1.1、在“src/backend/optimizer/plan/planner.c”中调用planner()时，会调用“src/backend/pgxc/plan/planner.c“中的pgxc_planner()。
+		1.2、pgxc_planner() 调用“src/backend/pgxc/plan/planner.c“中的pgxc_FQS_planner()
+		1.3、pgxc_FQS_planner()调用“src/backend/optimizer/util/pgxcship.c”中的 pgxc_is_query_shippable()。
+			如果query是可交付的，pgxc_is_query_shippable() 返回查询应该去的节点列表。 否则为 NULL。
+			如果query是可交付的，pgxc_FQS_planner 构建并返回计划。 如果不是，则返回 NULL
+		1.4、pgxc_planner 检查上一步的返回值。 如果查询是可交付的，则将此计划返回给 planner()。 否则，调用standard_planner() 来构建计划并将计划返回给planner()。
+
+
+	2、相关函数
+		核对是否可以在DN上完整评估query：static PlannedStmt *pgxc_FQS_planner(Query *query, int cursorOptions, ParamListInfo boundParams)
+
+		将query ship到DN，同时创建RemoteQuery类型的节点：static RemoteQuery *pgxc_FQS_create_remote_plan(Query *query, ExecNodes *exec_nodes, bool is_exec_direct)
+
+
+
+
+
+
+
