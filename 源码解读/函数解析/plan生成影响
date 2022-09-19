@@ -18,7 +18,24 @@ static Plan *create_unique_plan(PlannerInfo *root, UniquePath *best_path, int fl
 	.......
 }
 
-调用”create_unique_plan“的函数有：create_plan_recurse、
+调用”create_unique_plan“的函数有：create_plan_recurse
+
+在函数”create_unique_plan“中，依次执行下列步骤：
+	第一步：调用函数”create_plan_recurse“递归创建plan
+	第二步：调用函数”build_path_tlist“为path的输出构造一个target list（例如：TargetEntry列表）
+	第三步：如果top_plan节点不能进行投影并且它现有的targetlist已经不是我们需要的，我们需要添加一个Result节点来帮助它
+	第四步：构建控制信息显式在grouping步骤中，subplan的哪些输出列将接收检查
+	第五步：如果是”UNIQUE_PATH_HASH“，则获取hash散列的相等运算符提供给Agg节点使用；
+		否则，创建”ORDER BY列表“对输入进行兼容性排序，步骤如下：
+			第一步：创建”ORDER BY列表
+			第二步：调用函数”make_sort_from_sortclauses“，创建”sort plan“以根据给定的”sortclauses“进行排序
+			第三步：调用函数”make_unique_from_sortclauses“创建"unique plan"
+				在函数”make_unique_from_sortclauses“中，
+					第一步：将 SortGroupClause 列表转换为 attr 索引和”相等运算符“组成的数组（如 executor 所希望的那样）
+					第二步：针对XL，调用函数”find_push_down_plan“获取要push_down到的”RemoteSubplan“，以过滤掉重复数据，减少网络需要上需要发送的数据和Coordinator的负载
+	第六步：调用函数”copy_generic_path_info“将cost data从path复制到plan
+
+
 
 
 
@@ -61,6 +78,20 @@ static RemoteSubplan *create_remotescan_plan(PlannerInfo *root,   RemoteSubPath 
 }
 
 调用”create_remotescan_plan“的函数有：create_plan_recurse
+
+在函数”create_remotescan_plan“中，依次执行下列步骤：
+	第一步：保存原有的restriction
+	第二步：调用函数”adjust_subplan_distribution“确保subplan的distribution符合匹配要求
+	第三步：使用函数”create_plan_recurse“递归创建plan
+	第四步：调用函数”prepare_sort_from_pathkeys“依据给定的pathkeys准备sort
+	第五步：如果当前子计划没有充分排序，则使用函数”make_sort“插入一个sort节点
+	第六步：使用函数”make_remotesubplan“创建RemoteSubplan节点
+	第七步：使用函数”copy_generic_path_info“从path节点拷贝cost、size信息到plan节点
+
+
+
+
+
 
 
 3、================新增加函数”make_remotesubplan“
