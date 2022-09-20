@@ -29,7 +29,7 @@
 		return (Path *) pathnode;
 	}
 
-
+调用”create_remotesubplan_path“的函数有：recurse_set_operations、adjust_path_distribution、create_distinct_paths、create_one_window_path、create_window_paths、consider_groupingsets_paths、create_grouping_paths、grouping_planner
 
 
 
@@ -56,7 +56,7 @@
 	}
 
 
-
+调用”set_joinpath_distribution“的函数有：create_hashjoin_path、create_mergejoin_path、create_nestloop_path
 
 
 
@@ -79,7 +79,7 @@
 
 	}
 
-
+调用”set_scanpath_distribution“的函数有：create_seqscan_path、create_tidscan_path、create_samplescan_path、create_index_path、create_bitmap_heap_path、create_bitmap_and_path、create_bitmap_or_path
 
 
 
@@ -108,6 +108,7 @@
 		.......
 	}
 
+调用”set_subquery_pathlist“的函数有：set_rel_size
 
 
 
@@ -150,6 +151,10 @@ Since we ensure that all partitions of a partitioned table are always distribute
 	#endif
 		.......
 	}
+
+
+调用”create_append_path“的函数有：add_paths_to_append_rel、add_path、mark_dummy_rel、create_grouping_paths、generate_union_path、generate_nonunion_path、reparameterize_path
+
 
 
 
@@ -198,8 +203,15 @@ Since we ensure that all partitions of a partitioned table are always distribute
 	}
 
 
+调用”create_merge_append_path“的函数有：add_path、generate_mergeappend_paths
+
+
 
 7、================对material_path、unique_path影响
-直接使用代码”pathnode->path.distribution = (Distribution *) copyObject(subpath->distribution);“进行Distribution的拷贝
+在函数”create_material_path“、”create_unique_path“中，直接使用代码”pathnode->path.distribution = (Distribution *) copyObject(subpath->distribution);“进行Distribution的拷贝。
+
+
+调用”create_material_path“的函数有：set_tablesample_rel_pathlist、match_unsorted_outer
+调用”create_unique_path“的函数有：sort_inner_and_outer、match_unsorted_outer、consider_parallel_nestloop、hash_inner_and_outer、join_is_legal、populate_joinrel_with_paths
 
 
