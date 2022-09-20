@@ -91,8 +91,14 @@ FQS用以判断query是否可以被完整的ship到远端node以及进行ship，
 		核对是否可以在DN上完整评估query：static PlannedStmt *pgxc_FQS_planner(Query *query, int cursorOptions, ParamListInfo boundParams)
 
 		将query ship到DN，同时创建RemoteQuery类型的节点：static RemoteQuery *pgxc_FQS_create_remote_plan(Query *query, ExecNodes *exec_nodes, bool is_exec_direct)
-
-
+		在函数”pgxc_FQS_create_remote_plan“中，执行步骤如下所示：
+			第一步：对”is_exec_direct“进行判断，如果是，则直接设置成utilityStmt；如果否，则构建”RemoteQuery“类型节点
+			第二步：解析query树，以获取step query
+			第三步：优化多节点处理
+			第四步：使用函数”contains_temp_tables“判断query中是否使用了临时表
+			第五步：调用函数”fix_opfuncids“给例如coordinator上的”ExecNodes->en_expr“计算opfuncid字段。（opfuncid即procedure OID）
+			第六步：调用函数”get_plan_combine_type“获取combine_type
+			第七步：为正在创建的remote query构建一个虚拟RTE（即构建一个”RangeTblEntry“类型node，将该node附加到虚拟RTE上，并设置类型为RTE_REMOTE_DUMMY）
 
 
 
