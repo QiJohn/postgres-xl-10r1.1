@@ -24,7 +24,7 @@ static Plan *create_unique_plan(PlannerInfo *root, UniquePath *best_path, int fl
 	第一步：调用函数”create_plan_recurse“递归创建plan
 	第二步：调用函数”build_path_tlist“为path的输出构造一个target list（例如：TargetEntry列表）
 	第三步：如果top_plan节点不能进行投影并且它现有的targetlist已经不是我们需要的，我们需要添加一个Result节点来帮助它
-	第四步：构建控制信息显式在grouping步骤中，subplan的哪些输出列将接收检查
+	第四步：构建控制信息以显式在grouping步骤中，subplan的哪些输出列将接收检查
 	第五步：如果是”UNIQUE_PATH_HASH“，则获取hash散列的相等运算符提供给Agg节点使用；
 		否则，创建”ORDER BY列表“对输入进行兼容性排序，步骤如下：
 			第一步：创建”ORDER BY列表
@@ -114,6 +114,35 @@ RemoteSubplan *make_remotesubplan(PlannerInfo *root, Plan *lefttree, Distributio
 
 调用”make_remotesubplan“的函数有：create_minmaxagg_plan、create_remotescan_plan、standard_planner、make_subplan、SS_process_ctes
 
+在函数”make_remotesubplan“中，依次执行下列步骤：
+	第一步：判断”resultDistribution“（即远程结果的分布）是否为空？
+		不为空：
+			第一步：如果存在”distributionExpr“，则从”target list“中获取”distribution expression“
+			第二步：设置参数”distributionNodes“（该参数用于描述结果的分布）
+			第三步：设置参数”distributionRestrict“（该参数描述结果实际上被ship到的node集合）
+		为空：
+			进行简单赋值处理，设置”node->distributionType = LOCATOR_TYPE_NONE;  node->distributionKey = InvalidAttrNumber; node->distributionNodes = NIL;“
+
+	第二步：确定subplan将在哪些node上执行
+		判断”execDistribution“（即确定子计划的源数据是如何分布的，我们应该将子计划发送到哪里，以及如何合并结果）是否为空？
+		不为空：
+			从”execDistribution“中获取node list，并设置参数”node->nodeList“、”node->execOnAll“，以确定subplan将在哪些node上执行
+		为空：
+			第一步：从”resultDistribution“中获取node list，并赋值给”tmpset“
+			第二步：如果”tmpset“只有一个node，则表示在本地node上执行subplan；如果”tmpset“有多个node，则任意选择一个负载均衡的node执行subplan
+
+	第三步：当有多个node产生tuples时，需要合并排序
+		第一步：确定参与sort的最大数量为list_length(pathkeys)
+		第二步：遍历pathkeys，使用如下步骤逐一处理每个成员pathkey：
+			第一步：如果pathkey的”EquivalenceClass“是volatile，那么它一定来自 ORDER BY 子句，我们必须将它匹配到同一个目标列表条目；否则，可以按照pathkey的”EquivalenceClass“中列出的任何一个non-constant成员expression进行sort
+			第二步：调用函数”get_opfamily_member“从pathkey中查找正确的sort operator
+			第三步：调用函数”add_sort_column“构建排序信息数组
+		第三步：创建”SimpleSort“类型的node，并给该节点设置数据
+
+	第四步：对plan、node的其它成员变量进行赋值
+
+
+
 
 
 4、================函数”pgxc_FQS_planner“
@@ -130,6 +159,25 @@ static PlannedStmt *pgxc_FQS_planner(Query *query, int cursorOptions, ParamListI
 }
 
 调用”pgxc_FQS_planner“的函数有：pgxc_planner
+在函数”pgxc_FQS_planner“中，依次执行下列步骤：
+	第一步：出现以下情况直接return NULL：没有启用enable_fast_query_shipping；需要向后滚动的游标语句不使用FQS；游标语句不使用FQS；”EXEC  DIRECT“语句不使用FQS
+	第二步：使用函数“pgxc_is_query_shippable”确认query能否直接被ship，不能则直接return NULL
+	第三步：构建类型为”PlannerGlobal“、”PlannerInfo“的节点node
+	第四步：使用函数”pgxc_FQS_create_remote_plan“创建remote_plan
+		在函数”pgxc_FQS_create_remote_plan“中，执行步骤如下所示：
+			第一步：对”is_exec_direct“进行判断，如果是，则直接设置成utilityStmt；如果否，则构建”RemoteQuery“类型节点
+			第二步：解析query树，以获取step query
+			第三步：优化多节点处理
+			第四步：使用函数”contains_temp_tables“判断query中是否使用了临时表
+			第五步：调用函数”fix_opfuncids“给例如coordinator上的”ExecNodes->en_expr“计算opfuncid字段。（opfuncid即procedure OID）
+			第六步：调用函数”get_plan_combine_type“获取combine_type
+			第七步：为正在创建的remote query构建一个虚拟RTE（即构建一个”RangeTblEntry“类型node，将该node附加到虚拟RTE上，并设置类型为RTE_REMOTE_DUMMY）
+	第五步：在创建”PlannedStmt“之前，使用函数”set_plan_references“进行最后的清理
+	第六步：创建类型为”PlannedStmt“的节点node，并给成员变量commandType、canSetTag、utilityStmt、resultRelations、planTree等赋值
+
+
+
+
 
 
 
