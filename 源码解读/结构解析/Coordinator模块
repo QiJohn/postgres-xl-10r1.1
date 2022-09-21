@@ -1,0 +1,49 @@
+（1）宏定义”IS_PGXC_COORDINATOR“用于标识”coordinator正处于运行状态“，指向一个bool值
+
+
+
+
+
+
+
+
+
+
+
+（2）宏定义”IS_PGXC_LOCAL_COORDINATOR“用于标识”coordinator正处于运行状态，且为本地coordinator“，是coordinator的一种细分子类型
+	通过该宏可以定义一些只针对”本地coordinator“的操作
+	1、在函数”planner“中，只有”IS_PGXC_LOCAL_COORDINATOR“为真时，才会调用函数”pgxc_planner“
+	2、在函数”standard_planner“中，只有”IS_PGXC_LOCAL_COORDINATOR“为真、utilityStmt为真、utilityStmt为RemoteQuery时，才会调用”pgxc_direct_planner“
+	。。。。
+
+
+
+
+
+
+
+
+（3）宏定义”IS_PGXC_REMOTE_COORDINATOR“用于标识”coordinator正处于运行状态，且为远端coordinator“，是coordinator的一种细分子类型
+	通过该宏可以定义一些只针对”远端coordinator“的操作，与”本地coordinator“具有的操作而言，这些操作比较少
+	1、在函数”validateForeignKeyConstraint“中，”IS_PGXC_REMOTE_COORDINATOR“为true时，不需要进行任何操作就可以结束函数
+	2、在函数”ProcessCreateBarrierPrepare“中，”IS_PGXC_REMOTE_COORDINATOR“为false时，进行错误提示
+	3、在函数”ProcessCreateBarrierEnd“中，”IS_PGXC_REMOTE_COORDINATOR“为false时，进行错误提示
+	4、在函数”pgxc_node_begin“中，”IS_PGXC_REMOTE_COORDINATOR“为true时，忽略不处理
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
