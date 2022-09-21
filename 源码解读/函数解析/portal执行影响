@@ -59,7 +59,8 @@
 
 3、================PortalDrop
 	在函数“PortalDrop”中针对XL，会执行下列步骤：
-		第一步：调用函数“portalIsProducing”
+		第一步：调用函数“portalIsProducing”判断portal是否正在运行，若在运行则直接return；
+		第二步：当“portal->queryDesc”不为NULL时，调用函数“FreeQueryDesc”对其进行释放
 
 
 
