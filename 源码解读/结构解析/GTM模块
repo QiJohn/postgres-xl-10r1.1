@@ -1,0 +1,59 @@
+GTM：Global Transaction Manager
+1、==============文件目录
+	src/include/gtm/：头文件路径
+	src/gtm/client/： Library functions for GTM client
+	src/gtm/main/： GTM主程序
+	src/gtm/proxy/： GTM Proxy 主程序
+	src/gtm/recovery/： GTM 和 GTM Proxy 上的 PGXC 节点注册函数，以及 GTM standby全局变量的工具函数
+	src/gtm/common/： GTM、GTM client、GTM proxy之间通用的函数
+	src/gtm/libpq/： 从 PostgreSQL 派生的 libpq 协议函数。
+	src/gtm/path/： 从 PostgreSQL派生的可移植path处理例程
+
+
+	工具函数
+		src/gtm/libpq/ip.c 、src/gtm/libpq/pqcomm.c 、src/gtm/libpq/pqformat.c、src/gtm/common/elog.c 、src/gtm/common/aset.c 、src/gtm/common/mcxt.c、src/gtm/path/path.c、src/gtm/common/gtm_list.c、src/gtm/common/stringinfo.c中存在从PostgreSQL派生出来的函数
+		src/gtm/common/gtm_serialize.c：在GTM对data进行序列化和反序列化
+		src/gtm/common/gtm_serialize_debug.c：提供对GTM中data进行序列化管理的调试功能
+		src/gtm/common/gtm_utils.c：提供GTM相关的工具函数
+		src/gtm/common/gtm_lock.c：为GTM提供”锁“
+
+		src/gtm/recovery/register_common.c：提供GTM、GTM Proxy，节点注册函数
+
+
+
+2、================主程序
+文件”src/gtm/main/main.c“提供了GTM主程序相关的函数，其中程序入口函数”main“的执行流程如下所示：
+	第一步：调用函数”InitializeGTMOptions“进行参数初始化
+	第二步：调用函数”InitGTMProcess“初始化最小的支持组件，例如，内存上下文环境、线程控制结构
+	第三步：解析命令行选项并加载配置文件
+	第四步：调用函数”BaseInit“进行基本的初始化
+	。。。。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
