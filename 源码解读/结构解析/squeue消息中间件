@@ -1,0 +1,61 @@
+”squeue“全称”Shared queue“，基于共享内存实现session间数据交换（采用生产者、消费者模型），其中一个生产者生产的数据，同时可以被其它所有消费者读取。会话由其它DN进行初始化。生产者的的主要目的是从squeue中读取rows，然后将这些rows发送到父DN中。
+	生产者通常同时也是消费者，它会将tuples发送回父节点，而不将其放入队列。
+实现该squeue的文件为”src/backend/pgxc/squeue/squeue.c“
+
+
+（1）================实现函数
+	初始化squeue：void SharedQueuesInit(void)
+			在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
+
+	计算squeue使用的共享内存大小：Size SharedQueueShmemSize(void)
+			在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
+
+	保留一个命名的squeue，以便将来与进程(该进程用于向远程DN提供元组)之间进行数据交换：void SharedQueueAcquire(const char *sqname, int ncons)
+			在”src/backend/utils/cache/plancache.c“函数”SetRemoteSubplan“中，当”中间结果需要分布在多个目的DN上“时调用
+
+	作为消费者或生产者绑定到由 sqname 指定的共享队列：SharedQueue  SharedQueueBind(const char *sqname, List *consNodes,  List *distNodes, int *myindex, int *consMap)
+			在”src/backend/tcop/pquery.c“函数”PortalStart“中，当”使用single execution“时调用
+
+	将数据从本地tuplestore推送到指定消费者的squeue上：static bool SharedQueueDump(SharedQueue squeue, int consumerIdx, TupleTableSlot *tmpslot, Tuplestorestate *tuplestore)
+
+	将数据从slot中写入到指定消费者的squeue上，如果tuplestore存在数据则优先将tuplestore中的数据写入squeue：
+		void SharedQueueWrite(SharedQueue squeue, int consumerIdx, TupleTableSlot *slot, Tuplestorestate **tuplestore, MemoryContext tmpcxt)
+
+	将指定squeue中的一个row数据提取到tupleslot：bool SharedQueueRead(SharedQueue squeue, int consumerIdx, TupleTableSlot *slot, bool canwait)
+
+	将指定的消费者标记为已关闭，丢弃可能已经在squeue中的所有输入：void SharedQueueReset(SharedQueue squeue, int consumerIdx)
+
+	断开给定squeue的远端消费者：void SharedQueueDisconnectConsumer(const char *sqname)
+
+	重置没有消费者连接的squeue：void SharedQueueResetNotConnected(SharedQueue squeue)
+
+	设置超时时间，等待生产者闩锁：bool SharedQueueWaitOnProducerLatch(SharedQueue squeue, long timeout)
+
+	确定生产者是否可以安全的暂停工作：bool SharedQueueCanPause(SharedQueue squeue)
+
+	squeue使用结束：int SharedQueueFinish(SharedQueue squeue, TupleDesc tupDesc, Tuplestorestate **tuplestore)
+
+	解除当前进程和squeue之间的绑定：void SharedQueueUnBind(SharedQueue squeue, bool failed)
+
+	如果具有指定名称的squeue仍然存在，则将对应的消费者设置为“Done”：void SharedQueueRelease(const char *sqname)
+
+	后台程序运行结束执行cleanup：void SharedQueuesCleanup(int code, Datum arg)
+
+	将数据写入squeue：static bool sq_push_long_tuple(ConsState *cstate, RemoteDataRow datarow)
+
+	从squeue读取long tuple：static void sq_pull_long_tuple(ConsState *cstate, RemoteDataRow datarow, int consumerIdx, SQueueSync *sqsync)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
