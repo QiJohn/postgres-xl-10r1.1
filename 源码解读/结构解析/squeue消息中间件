@@ -5,45 +5,67 @@
 
 （1）================实现函数
 	初始化squeue：void SharedQueuesInit(void)
-			在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
+		=》在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
 
 	计算squeue使用的共享内存大小：Size SharedQueueShmemSize(void)
-			在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
+		=》在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
 
 	保留一个命名的squeue，以便将来与进程(该进程用于向远程DN提供元组)之间进行数据交换：void SharedQueueAcquire(const char *sqname, int ncons)
-			在”src/backend/utils/cache/plancache.c“函数”SetRemoteSubplan“中，当”中间结果需要分布在多个目的DN上“时调用
+		=》在”src/backend/utils/cache/plancache.c“函数”SetRemoteSubplan“中，当”中间结果需要分布在多个目的DN上“时调用
 
 	作为消费者或生产者绑定到由 sqname 指定的共享队列：SharedQueue  SharedQueueBind(const char *sqname, List *consNodes,  List *distNodes, int *myindex, int *consMap)
-			在”src/backend/tcop/pquery.c“函数”PortalStart“中，当”使用single execution“时调用
+		=》在”src/backend/tcop/pquery.c“函数”PortalStart“中，”绑定squeue进行数据交换“时调用
 
 	将数据从本地tuplestore推送到指定消费者的squeue上：static bool SharedQueueDump(SharedQueue squeue, int consumerIdx, TupleTableSlot *tmpslot, Tuplestorestate *tuplestore)
+		=》在”src/backend/pgxc/squeue/squeue.c“函数”SharedQueueWrite“、”SharedQueueFinish“中调用
+		SharedQueueWrite --> SharedQueueDump --> sq_push_long_tuple；SharedQueueFinish --> SharedQueueDump --> sq_push_long_tuple
 
 	将数据从slot中写入到指定消费者的squeue上，如果tuplestore存在数据则优先将tuplestore中的数据写入squeue：
 		void SharedQueueWrite(SharedQueue squeue, int consumerIdx, TupleTableSlot *slot, Tuplestorestate **tuplestore, MemoryContext tmpcxt)
+		=》在”src/backend/executor/producerReceiver.c“函数”producerReceiveSlot“中，调用该SharedQueueWrite在”tuple不匹配消费者queue“时，将tuple存储到本地tuplestore
 
 	将指定squeue中的一个row数据提取到tupleslot：bool SharedQueueRead(SharedQueue squeue, int consumerIdx, TupleTableSlot *slot, bool canwait)
+		=》在”src/backend/tcop/pquery.c“函数”PortalRun“中，循环调用该函数从queue中获取tuple，直到处理完plan中定义的tuple数目
 
 	将指定的消费者标记为已关闭，丢弃可能已经在squeue中的所有输入：void SharedQueueReset(SharedQueue squeue, int consumerIdx)
+		=》在”src/backend/commands/portalcmds.c“函数”PortalCleanup“中，清理portal过程中，本地执行子计划正在生成数据并通过squeue分发时调用；或者清理消费者时调用
+		=》在”src/backend/tcop/pquery.c“函数”AdvanceProducingPortal“中，catch到错误时调用
+		=》在”src/backend/tcop/pquery.c“函数”cleanupClosedProducers“中，catch到错误时调用
 
 	断开给定squeue的远端消费者：void SharedQueueDisconnectConsumer(const char *sqname)
+		=》在”src/backend/commands/prepare.c“函数”DropPreparedStatement“中调用
 
 	重置没有消费者连接的squeue：void SharedQueueResetNotConnected(SharedQueue squeue)
+		=》在”src/backend/executor/producerReceiver.c“函数”producerDestroyReceiver“中，squeue使用异常结束时调用
+		=》在”src/backend/pgxc/squeue/squeue.c“函数”SharedQueueUnBind“中，超时时调用以实现未连接消费者的重置
 
 	设置超时时间，等待生产者闩锁：bool SharedQueueWaitOnProducerLatch(SharedQueue squeue, long timeout)
+		=》在”src/backend/executor/producerReceiver.c“函数”producerDestroyReceiver“中，squeue使用异常结束时进行设置调用
 
 	确定生产者是否可以安全的暂停工作：bool SharedQueueCanPause(SharedQueue squeue)
+		=》在”src/backend/tcop/pquery.c“函数”AdvanceProducingPortal“中，当”portal的保留存储中有可供读取的tuple，且消费者queue不为空“时，调用该函数暂停squeue，以防止在生产者处缓存过多的rows
+		=》在”src/backend/tcop/pquery.c“函数”AdvanceProducingPortal“中，当”尝试dump本地tuplestores“失败时调用
 
 	squeue使用结束：int SharedQueueFinish(SharedQueue squeue, TupleDesc tupDesc, Tuplestorestate **tuplestore)
+		=》在”src/backend/executor/producerReceiver.c“函数”producerDestroyReceiver“中调用
+		=》在”src/backend/executor/producerReceiver.c“函数”ProducerReceiverPushBuffers“中，”将data从本地tuplestores推送到共享内存，以供消费者使用“时调用
 
 	解除当前进程和squeue之间的绑定：void SharedQueueUnBind(SharedQueue squeue, bool failed)
+		=》在”src/backend/commands/portalcmds.c“函数”PortalCleanup“中，当”executor完成，portal->status == PORTAL_FAILED“时调用
+		=》在”src/backend/executor/producerReceiver.c“函数”producerDestroyReceiver“中，当”消费者完成，释放共享资源“时调用
+		=》在”src/backend/tcop/pquery.c“函数”PortalStart“中，当“调用SharedQueueBind成功后，调用ExecutorStart失败”进行解绑定时调用
 
 	如果具有指定名称的squeue仍然存在，则将对应的消费者设置为“Done”：void SharedQueueRelease(const char *sqname)
+		=》在”src/backend/utils/cache/plancache.c“函数”ReleaseGenericPlan“中，如果持有squeue，则调用该函数进行释放
 
 	后台程序运行结束执行cleanup：void SharedQueuesCleanup(int code, Datum arg)
+		=》在“src/backend/tcop/postgres.c”函数“PostgresMain”中，注册该函数，在程序退出时调用
 
 	将数据写入squeue：static bool sq_push_long_tuple(ConsState *cstate, RemoteDataRow datarow)
+		=》在”src/backend/pgxc/squeue/squeue.c“函数”SharedQueueDump“中，向消费者queue写入数据时调用
 
 	从squeue读取long tuple：static void sq_pull_long_tuple(ConsState *cstate, RemoteDataRow datarow, int consumerIdx, SQueueSync *sqsync)
+		=》在”src/backend/pgxc/squeue/squeue.c“函数”SharedQueueRead“中，至少有一行row数据，需要读取并存储到slot中时调用
 
 
 
