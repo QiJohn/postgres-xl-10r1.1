@@ -1,0 +1,70 @@
+场景说明：两个DN、两个CN
+
+启动DN、CN后，在系统中呈现的进程如下所示，每个DN、CN除了创建主进程外，会依次创建归宿自己的子进程pooler、checkpointer、writer、wal writer、autovacuum、stats collector、cluster monitor、logical replication
+	zq       24555     1  0 15:38 pts/0    00:00:01 postgres-xl-10r1.1/bin/gtm -D /home/zq/postgres-xl-data/data/data_gtm
+	zq       24556     1  0 15:38 pts/0    00:00:00 postgres-xl-10r1.1/bin/postgres --datanode -p 15432 -c pooler_port=40101 -D postgres-xl-data/data/server1/datanode
+	zq       24557     1  0 15:38 pts/0    00:00:00 postgres-xl-10r1.1/bin/postgres --datanode -p 15433 -c pooler_port=40102 -D postgres-xl-data/data/server2/datanode
+	zq       24558     1  0 15:38 pts/0    00:00:00 postgres-xl-10r1.1/bin/postgres --coordinator -p 5432 -c pooler_port=40100 -D postgres-xl-data/data/server1/coord
+	zq       24559     1  0 15:38 pts/0    00:00:00 postgres-xl-10r1.1/bin/postgres --coordinator -p 5431 -c pooler_port=40009 -D postgres-xl-data/data/server2/coord
+	zq       24561 24559  0 15:38 ?        00:00:00 postgres: pooler process
+	zq       24563 24557  0 15:38 ?        00:00:00 postgres: pooler process
+	zq       24565 24558  0 15:38 ?        00:00:00 postgres: pooler process
+	zq       24568 24559  0 15:38 ?        00:00:00 postgres: checkpointer process
+	zq       24569 24559  0 15:38 ?        00:00:00 postgres: writer process
+	zq       24570 24559  0 15:38 ?        00:00:00 postgres: wal writer process
+	zq       24571 24559  0 15:38 ?        00:00:00 postgres: autovacuum launcher process
+	zq       24572 24559  0 15:38 ?        00:00:00 postgres: stats collector process
+	zq       24573 24559  0 15:38 ?        00:00:00 postgres: cluster monitor process
+	zq       24574 24559  0 15:38 ?        00:00:00 postgres: bgworker: logical replication launcher
+	zq       24575 24558  0 15:38 ?        00:00:00 postgres: checkpointer process
+	zq       24576 24558  0 15:38 ?        00:00:00 postgres: writer process
+	zq       24577 24558  0 15:38 ?        00:00:00 postgres: wal writer process
+	zq       24578 24558  0 15:38 ?        00:00:00 postgres: autovacuum launcher process
+	zq       24579 24558  0 15:38 ?        00:00:00 postgres: stats collector process
+	zq       24581 24558  0 15:38 ?        00:00:00 postgres: cluster monitor process
+	zq       24583 24558  0 15:38 ?        00:00:00 postgres: bgworker: logical replication launcher
+	zq       24598 24557  0 15:38 ?        00:00:00 postgres: checkpointer process
+	zq       24599 24557  0 15:38 ?        00:00:00 postgres: writer process
+	zq       24600 24557  0 15:38 ?        00:00:00 postgres: wal writer process
+	zq       24601 24557  0 15:38 ?        00:00:00 postgres: autovacuum launcher process
+	zq       24602 24557  0 15:38 ?        00:00:00 postgres: stats collector process
+	zq       24603 24557  0 15:38 ?        00:00:00 postgres: cluster monitor process
+	zq       24604 24557  0 15:38 ?        00:00:00 postgres: bgworker: logical replication launcher
+	zq       42603 24556  0 16:25 ?        00:00:00 postgres: checkpointer process
+	zq       42604 24556  0 16:25 ?        00:00:00 postgres: writer process
+	zq       42605 24556  0 16:25 ?        00:00:00 postgres: wal writer process
+	zq       42606 24556  0 16:25 ?        00:00:00 postgres: autovacuum launcher process
+	zq       42607 24556  0 16:25 ?        00:00:00 postgres: stats collector process
+	zq       42608 24556  0 16:25 ?        00:00:00 postgres: pooler process
+	zq       42609 24556  0 16:25 ?        00:00:00 postgres: cluster monitor process
+	zq       42610 24556  0 16:25 ?        00:00:00 postgres: bgworker: logical replication launcher
+
+
+
+
+当使用命令”./psql -p 5432 -d postgres“连接其中一个CN后，系统增加如下所示进程：
+	zq       24876  5502  0 15:39 pts/3    00:00:00 ./psql -p 5432 -d postgres
+	zq       24877 24558  0 15:39 ?        00:00:00 postgres: zq postgres [local] idle      --CN的主进程创建的子进程
+
+
+当在psql中使用命令”select * from t_student;“查询数据时，系统增加如下所示进程：
+	zq       63225 24556  0 17:19 ?        00:00:00 postgres: zq postgres ::1(55610) idle  --DN1创建的子进程
+	zq       63227 24557  0 17:19 ?        00:00:00 postgres: zq postgres ::1(49508) idle   --DN2创建的子进程
+
+
+当在psql中使用命令”select * from t_student left join t_class on t_student.class_id=t_class.class_id;“查询数据时，系统增加如下所示进程：
+	zq       42626 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55154) idle    --DN1创建的子进程（执行SQL语句生成的plan）
+	zq       42627 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55156) idle    --DN1创建的子进程（使用squeue进行数据传递）
+	zq       42630 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49056) idle    --DN2创建的子进程（执行SQL语句生成的plan）
+	zq       42631 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49058) idle    --DN2创建的子进程（使用squeue进行数据传递）
+	zq       42910 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55170) idle    --DN1创建的子进程（使用squeue进行数据传递）
+	zq       42912 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49068) idle    --DN2创建的子进程（使用squeue进行数据传递）
+
+
+
+
+
+
+
+
+
