@@ -48,7 +48,7 @@
 
 
 当在psql中使用命令”select * from t_student;“查询数据时，系统增加如下所示进程：
-	zq       63225 24556  0 17:19 ?        00:00:00 postgres: zq postgres ::1(55610) idle  --DN1创建的子进程
+	zq       63225 24556  0 17:19 ?        00:00:00 postgres: zq postgres ::1(55610) idle   --DN1创建的子进程
 	zq       63227 24557  0 17:19 ?        00:00:00 postgres: zq postgres ::1(49508) idle   --DN2创建的子进程
 
 
