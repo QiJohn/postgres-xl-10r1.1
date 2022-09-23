@@ -3,6 +3,8 @@
 实现该squeue的文件为”src/backend/pgxc/squeue/squeue.c“
 
 
+
+
 （1）================实现函数
 	初始化squeue：void SharedQueuesInit(void)
 		=》在”src/backend/storage/ipc/ipci.c“中，由函数”CreateSharedMemoryAndSemaphores“对共享内存、信号量进行初始化时调用
@@ -72,10 +74,70 @@
 
 
 
+（2）================squeue通信执行流程
+1、构建向squeue写入数据的生产者：
+exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
+	函数”CreateProducerDestReceiver“如下所示：
+		DestReceiver *CreateProducerDestReceiver(void){
+			ProducerState *self = (ProducerState *) palloc0(sizeof(ProducerState));
+			self->pub.receiveSlot = producerReceiveSlot;
+			self->pub.rStartup = producerStartupReceiver;
+			self->pub.rShutdown = producerShutdownReceiver;
+			self->pub.rDestroy = producerDestroyReceiver;
+			self->pub.mydest = DestProducer;
+
+			/* private fields will be set by SetTuplestoreDestReceiverParams */
+			self->tcount = 0;
+			self->selfcount = 0;
+			self->othercount = 0;
+
+			return (DestReceiver *) self;
+		}
+
+2、向squeue写入数据
+	producerReceiveSlot-->SharedQueueWrite
+	ExecutePlan-->(*dest->receiveSlot) (slot, dest)
+	do_tup_output
+	PortalRun
+	RunFromStore
+
+
+
+3、从squeue读数据
+	PortalRun-->SharedQueueRead
+	详细介绍如下所示：bool PortalRun(Portal portal, long count, bool isTopLevel, bool run_once, DestReceiver *dest, DestReceiver *altdest, char *completionTag){
+		bool		result;
+		uint64		nprocessed;
+		ResourceOwner saveTopTransactionResourceOwner;
+		MemoryContext saveTopTransactionContext;
+		........
+			for (;;){
+				List *producing = getProducingPortals();
+				bool done;
+				done = SharedQueueRead(squeue, myindex, slot, list_length(producing) == 0);    //直接从squeue中获取tuple
+				.........
+				/* Send the tuple */
+				(*dest->receiveSlot) (slot, dest);  //绑定函数”printtup“，通过libpq发送tuple
+				if (count && count == ++nprocessed)
+					break;
+			}
+			(*dest->rShutdown) (dest);
+		........
+	}
 
 
 
 
+
+（3）================日志分析
+	构造subplan：plan p_1_682c_1: Remote Subplan
+	创建squeue：Create a new SQueue p_1_682c_1 and format it for 1 consumers
+	绑定squeue：bind p_1_682c_1 to p_1_682c_1
+	创建portal：Created portal p_1_682c_1 and inserted an entry in the has table
+	绑定DN：Bind node datanode_1 to squeue of step p_1_682c_1 as a producer
+	SQueue p_1_682c_1 consumer @0 is set to self
+	Node 1 of SQueue p_1_682c_1 is bound at consumer 0, cs_status 0
+	向squeue写入数据：SQueue p_1_682c_1, consumer is active, writing data
 
 
 
