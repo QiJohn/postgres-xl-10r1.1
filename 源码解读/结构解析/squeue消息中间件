@@ -95,35 +95,99 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 		}
 
 2、向squeue写入数据
-	producerReceiveSlot-->SharedQueueWrite
-	ExecutePlan-->(*dest->receiveSlot) (slot, dest)
-	do_tup_output
-	PortalRun
+2.1、ExecutePlan-->(*dest->receiveSlot) (slot, dest)
+		详细介绍如下所示：static void ExecutePlan(EState *estate, PlanState *planstate,	bool use_parallel_mode,	CmdType operation,	bool sendTuples,
+			uint64 numberTuples, ScanDirection direction, DestReceiver *dest, bool execute_once){
+				........
+				for (;;){
+					........
+					if (sendTuples){
+						if (!((*dest->receiveSlot) (slot, dest)))     //绑定函数”producerReceiveSlot“，通过"producerReceiveSlot内的SharedQueueWrite"将tuple写入squeue
+							break;
+					}
+					........
+				}
+				........
+		}
+
+
+2.2、PortalRun-->(*dest->receiveSlot) (slot, dest)
+		详细介绍如下所示：bool PortalRun(Portal portal, long count, bool isTopLevel, bool run_once, DestReceiver *dest, DestReceiver *altdest, char *completionTag){
+			bool		result;
+			uint64		nprocessed;
+			ResourceOwner saveTopTransactionResourceOwner;
+			MemoryContext saveTopTransactionContext;
+			........
+				for (;;){
+					.........
+					if (TupIsNull(slot)){
+						if (!done && producing){
+							/* No data to read, advance producing portals */
+							ListCell   *lc = list_head(producing);
+							while (lc){
+								Portal p = (Portal) lfirst(lc);
+								/* Get reference to next entry before
+									* advancing current portal, because the
+									* function may remove current entry from
+									* the list.
+									*/
+								lc = lnext(lc);
+								AdvanceProducingPortal(p, false);   //在该函数中，调用“ExecutorRun->producerReceiveSlot->SharedQueueWrite”将tuple写入到squeue中，供消费者使用
+							}
+							continue;
+						}else{
+							queryDesc->squeue = NULL;
+							break;
+						}
+					}
+					/* Send the tuple */
+					(*dest->receiveSlot) (slot, dest);    //绑定函数”printtup“，通过libpq发送tuple
+					if (count && count == ++nprocessed)
+						break;
+				}
+				(*dest->rShutdown) (dest);
+			........
+		}
+		在函数“PortalRun”中，执行步骤如下所示：
+			第一步：检查portal是否使用不当，并使用函数“MarkPortalActive”将portal标记为“active”状态
+			第二步：设置global portal的上下文指针
+			第三步：对portal采取的策略(portal->strategy)进行判断，不同策略采用不同的处理方式
+				针对“PORTAL_DISTRIBUTED”进行如下处理
+					第一步：如果执行的本地subplan用于产生数据并通过squeue进行分发，则进行如下处理：
+						“portal->queryDesc->squeue”不为空，则确保生产者正在推进
+						“portal->queryDesc->squeue”为空，则调用函数“PortalRunSelect”获取结果的所需部分
+					第二步：如果是从squeue中获取本地数据，则此时作为消费者，进行如下处理：
+						第一步：调用函数“MakeSingleTupleTableSlot”，准备一个独立的slot用于接收tuples
+						第二步：进入循环处理中，在循环中，调用函数“SharedQueueRead”从squeue中读取数据；当slot为空后，通过函数“AdvanceProducingPortal”调用“SharedQueueWrite”向squeue写入数据；通过函数指针“dest->receiveSlot”调用绑定的函数“printtup”进行tuple发送
+						第三步：通过函数指针“dest->rShutdown”执行绑定函数
+						第四步：执行函数“ExecDropSingleTupleTableSlot”释放创建的slot
+					第三步：将portal标记为非激活“PORTAL_READY”状态
+			第四步：使用catch对捕捉的异常进行处理
+
+
+
 	RunFromStore
+	do_tup_output
 
 
 
 3、从squeue读数据
 	PortalRun-->SharedQueueRead
-	详细介绍如下所示：bool PortalRun(Portal portal, long count, bool isTopLevel, bool run_once, DestReceiver *dest, DestReceiver *altdest, char *completionTag){
-		bool		result;
-		uint64		nprocessed;
-		ResourceOwner saveTopTransactionResourceOwner;
-		MemoryContext saveTopTransactionContext;
-		........
-			for (;;){
-				List *producing = getProducingPortals();
-				bool done;
-				done = SharedQueueRead(squeue, myindex, slot, list_length(producing) == 0);    //直接从squeue中获取tuple
-				.........
-				/* Send the tuple */
-				(*dest->receiveSlot) (slot, dest);  //绑定函数”printtup“，通过libpq发送tuple
-				if (count && count == ++nprocessed)
-					break;
-			}
-			(*dest->rShutdown) (dest);
-		........
-	}
+		详细介绍如下所示：bool PortalRun(Portal portal, long count, bool isTopLevel, bool run_once, DestReceiver *dest, DestReceiver *altdest, char *completionTag){
+			bool		result;
+			uint64		nprocessed;
+			ResourceOwner saveTopTransactionResourceOwner;
+			MemoryContext saveTopTransactionContext;
+			........
+				for (;;){
+					List *producing = getProducingPortals();
+					bool done;
+					done = SharedQueueRead(squeue, myindex, slot, list_length(producing) == 0);    //直接从squeue中获取tuple
+					.........
+				}
+				(*dest->rShutdown) (dest);
+			........
+		}
 
 
 
