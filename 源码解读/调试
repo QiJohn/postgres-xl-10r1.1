@@ -1,0 +1,10 @@
+1、 == == == == == == == == 在代码中添加打印栈的相关信息，如下所示：
+首先添加头文件：#include<execinfo.h>
+再添加如下代码
+	void *backtrace_buff[100];
+	int bj, nptrs;
+	char **strings;
+	nptrs = backtrace(backtrace_buff, 100);
+	strings = backtrace_symbols(backtrace_buff, nptrs);
+	for (bj = 0; bj < nptrs; bj++)
+		elog(DEBUG1, "调用函数producerReceiveSlot，在执行SharedQueueWrite前进行调试信息打印:%s", strings[bj]);
