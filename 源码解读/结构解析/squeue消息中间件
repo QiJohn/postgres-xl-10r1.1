@@ -154,8 +154,11 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 			第三步：对portal采取的策略(portal->strategy)进行判断，不同策略采用不同的处理方式
 				针对“PORTAL_DISTRIBUTED”进行如下处理
 					第一步：如果执行的本地subplan用于产生数据并通过squeue进行分发，则进行如下处理：
-						“portal->queryDesc->squeue”不为空，则确保生产者正在推进，此时作为生产者，从tuple's store中获取tuple，并调用函数“AdvanceProducingPortal”将tuple写入到squeue
-						“portal->queryDesc->squeue”为空，则调用函数“PortalRunSelect”获取结果的所需部分
+						判断“portal->queryDesc->squeue”是否为空
+							不为空：
+								确保生产者正在推进，此时作为生产者，如果“ExecutorFinish不是done”调用函数“AdvanceProducingPortal”执行"portal's query"，并将tuple分发给消费者；调用函数“RunFromStore”（该函数通过dest->receiveSlot绑定函数“printtup”进行tuple发送）从”portal's tuple store“获取tuple
+
+							为空：则调用函数“PortalRunSelect”获取结果的所需部分
 					第二步：如果是从squeue中获取本地数据，则此时作为消费者，进行如下处理：
 						第一步：调用函数“MakeSingleTupleTableSlot”，准备一个独立的slot用于接收tuples
 						第二步：进入循环处理中，在循环中，调用函数“SharedQueueRead”从squeue中读取数据；当slot为空后，通过函数“AdvanceProducingPortal”调用“SharedQueueWrite”向squeue写	入数据；通过函数指针“dest->receiveSlot”调用绑定的函数“printtup”进行tuple发送
@@ -193,16 +196,25 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 
-（3）================日志分析
+（3）================结合日志分析流程
+	每个DN会创建作为消费者存在的子进程、作为生产者存在的消费者
+
+	创建portal：Created portal p_1_682c_1 and inserted an entry in the has table
 	构造subplan：plan p_1_682c_1: Remote Subplan
 	创建squeue：Create a new SQueue p_1_682c_1 and format it for 1 consumers
-	绑定squeue：bind p_1_682c_1 to p_1_682c_1
+	绑定squeue消费者：Bind node datanode_1 to SQueue p_1_682c_1 as a consumer 54974
+	绑定squeue生产者：Bind node datanode_2 to squeue of step p_1_682c_1 as a producer
 	创建portal：Created portal p_1_682c_1 and inserted an entry in the has table
 	绑定DN：Bind node datanode_1 to squeue of step p_1_682c_1 as a producer
-	SQueue p_1_682c_1 consumer @0 is set to self
-	Node 1 of SQueue p_1_682c_1 is bound at consumer 0, cs_status 0
-	向squeue写入数据：SQueue p_1_682c_1, consumer is active, writing data
-
+	生产者向squeue写入数据：SQueue p_1_682c_1, consumer is active, writing data
+	消费者从squeue读取数据：SQueue p_1_682c_1, consumer (node 0, pid 54973, status 0) - 53 queued tuples to read
+	当squeue中不存在tuple供消费者使用时，等待生产者产生数据：
+		SQueue p_1_682c_1, consumer (node 0, pid 54973, status 0) - no queued tuples to read, waiting for producer to produce more data
+	完成后解绑定：
+		SQueue p_1_682c_1, finishing the SQueue - producer node 1, pid 54974, nconsumers 1
+		SQueue p_1_682c_1 finishing, consumer at 0, consumer node 0, pid 54973, status 0
+		SQueue p_1_682c_1, unbinding the SQueue (failed: F) - producer node 1, pid 54974, nconsumers 1
+		SQueue p_1_682c_1 unbinding, check consumer at 0, consumer node 0, pid 54973, status 3
 
 
 
