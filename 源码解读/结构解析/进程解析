@@ -54,17 +54,21 @@
 
 当在psql中使用命令”select * from t_student left join t_class on t_student.class_id=t_class.class_id;“查询数据时，系统增加如下所示进程：
 	zq       42626 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55154) idle    --DN1创建的子进程（执行SQL语句生成的plan）
-	zq       42627 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55156) idle    --DN1创建的子进程（使用squeue进行数据传递）
+	zq       42627 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55156) idle    --DN1创建的子进程（使用squeue进行数据传递，作为生产者）
 	zq       42630 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49056) idle    --DN2创建的子进程（执行SQL语句生成的plan）
-	zq       42631 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49058) idle    --DN2创建的子进程（使用squeue进行数据传递）
-	zq       42910 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55170) idle    --DN1创建的子进程（使用squeue进行数据传递）
-	zq       42912 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49068) idle    --DN2创建的子进程（使用squeue进行数据传递）
+	zq       42631 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49058) idle    --DN2创建的子进程（使用squeue进行数据传递，作为生产者）
+	zq       42910 24556  0 16:25 ?        00:00:00 postgres: zq postgres ::1(55170) idle    --DN1创建的子进程（使用squeue进行数据传递，作为消费者）
+	zq       42912 24557  0 16:25 ?        00:00:00 postgres: zq postgres ::1(49068) idle    --DN2创建的子进程（使用squeue进行数据传递，作为消费者）
 
 
 
+进程间TCP通信：端口
+	DN1的端口为：15432
+		48852<-->15432<-->48844
+		48854<-->[15432]<-->48872
 
 
-
-
-
-
+	DN2的端口为：15433
+		58712<-->15433<-->58700
+		58716<-->[15433]<-->58720
+		58728<-->[15433]
