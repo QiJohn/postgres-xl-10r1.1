@@ -197,7 +197,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 （3）================结合日志分析流程
-	每个DN会创建作为消费者存在的子进程、作为生产者存在的消费者
+	-----------每个DN会创建作为消费者存在的子进程、作为生产者存在的消费者----------
 
 	创建portal：Created portal p_1_682c_1 and inserted an entry in the has table
 	构造subplan：plan p_1_682c_1: Remote Subplan
@@ -215,6 +215,38 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 		SQueue p_1_682c_1 finishing, consumer at 0, consumer node 0, pid 54973, status 0
 		SQueue p_1_682c_1, unbinding the SQueue (failed: F) - producer node 1, pid 54974, nconsumers 1
 		SQueue p_1_682c_1 unbinding, check consumer at 0, consumer node 0, pid 54973, status 3
+
+
+
+
+
+（4）使用SQL语句示例
+	postgres=# explain  select * from t_student  join t_class on t_student.class_id=t_class.class_id;
+													QUERY PLAN
+	-----------------------------------------------------------------------------------------------------------
+	Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=7.54..21.48 rows=307 width=568)
+	->  Hash Join  (cost=7.54..21.48 rows=307 width=568)
+			Hash Cond: (t_student.class_id = t_class.class_id)
+			->  Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=100.00..381.50 rows=500 width=540)
+				Distribute results by H: class_id
+				->  Seq Scan on t_student  (cost=0.00..9.00 rows=500 width=540)
+			->  Hash  (cost=4.46..4.46 rows=246 width=28)
+				->  Seq Scan on t_class  (cost=0.00..4.46 rows=246 width=28)
+	(8 rows)
+
+	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中tc_class表的class_id字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中tc_class表的class_id字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
+	在整个sql语句执行过程中：
+		向squeue写入数据不是一次性将所有class_id数据写入，而是分多次写入
+		从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待
+		DN1的涉及的处理
+			DN1将本地节点中表t_class的class_id字段写入进自己的squeue中，并读取DN2节点中squeue的数据；DN1对本地节点中表t_student、t_class依据class_id进行join操作；DN1对本地节点表t_student、DN2中t_class表，依据从DN2的squeue获取的class_id进行join操作；最后依次返回join的结果。
+			DN1在从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待。
+
+		DN2的涉及的处理
+			DN2将本地节点中表t_class的class_id字段写入进自己的squeue中（不是一次性将所有class_id数据写入，而是分多次写入），并读取DN1节点中squeue的数据；DN2对本地节点中表t_student、t_class依据class_id进行join操作；DN2对本地节点表t_student、DN1中t_class表，依据从DN1的squeue获取的class_id进行join操作；最后依次返回join的结果。
+
+
+
 
 
 
