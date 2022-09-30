@@ -75,7 +75,11 @@
 
 
 （2）================squeue通信执行流程
-1、构建向squeue写入数据的生产者：
+1、绑定squeue：
+在函数”PortalStart“中，针对”portal->strategy“为”PORTAL_DISTRIBUTED“的情况下，调用函数”CreateQueryDesc“创建QueryDesc；在”single execution“情况下，调用函数”SharedQueueBind“进行squeue的绑定
+
+
+2、构建向squeue写入数据的生产者：
 exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 	函数”CreateProducerDestReceiver“如下所示：
 		DestReceiver *CreateProducerDestReceiver(void){
@@ -94,8 +98,8 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 			return (DestReceiver *) self;
 		}
 
-2、向squeue写入数据
-2.1、ExecutePlan-->(*dest->receiveSlot) (slot, dest)
+3、向squeue写入数据
+3.1、ExecutePlan-->(*dest->receiveSlot) (slot, dest)
 		详细介绍如下所示：static void ExecutePlan(EState *estate, PlanState *planstate,	bool use_parallel_mode,	CmdType operation,	bool sendTuples,
 			uint64 numberTuples, ScanDirection direction, DestReceiver *dest, bool execute_once){
 				........
@@ -111,7 +115,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 		}
 
 
-2.2、PortalRun-->(*dest->receiveSlot) (slot, dest)
+3.2、PortalRun-->(*dest->receiveSlot) (slot, dest)
 		详细介绍如下所示：bool PortalRun(Portal portal, long count, bool isTopLevel, bool run_once, DestReceiver *dest, DestReceiver *altdest, char *completionTag){
 			bool		result;
 			uint64		nprocessed;
@@ -174,7 +178,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 
-3、从squeue读数据
+4、从squeue读数据
 	PortalRun-->SharedQueueRead
 		详细介绍如下所示：bool PortalRun(Portal portal, long count, bool isTopLevel, bool run_once, DestReceiver *dest, DestReceiver *altdest, char *completionTag){
 			bool		result;
@@ -193,6 +197,9 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 		}
 
 
+
+5、squeue清理
+在函数”PortalCleanup“中，针对”portal->strategy == PORTAL_DISTRIBUTED“的情况下，调用函数”SharedQueueUnBind“进行squeue解绑定；调用函数”SharedQueueReset“进行squeue清理
 
 
 
@@ -221,33 +228,230 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 （4）使用SQL语句示例
-	postgres=# explain  select * from t_student  join t_class on t_student.class_id=t_class.class_id;
+	explain  select * from t_student inner  join t_class on t_class.class_id=t_student.class_id;
 													QUERY PLAN
-	-----------------------------------------------------------------------------------------------------------
-	Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=7.54..21.48 rows=307 width=568)
-	->  Hash Join  (cost=7.54..21.48 rows=307 width=568)
+	-------------------------------------------------------------------------------------------------------------
+	Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=7.54..58.92 rows=1270 width=569)
+	->  Hash Join  (cost=7.54..58.92 rows=1270 width=569)
 			Hash Cond: (t_student.class_id = t_class.class_id)
-			->  Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=100.00..381.50 rows=500 width=540)
+			->  Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=100.00..1542.92 rows=2561 width=541)
 				Distribute results by H: class_id
-				->  Seq Scan on t_student  (cost=0.00..9.00 rows=500 width=540)
+				->  Seq Scan on t_student  (cost=0.00..44.61 rows=2561 width=541)
 			->  Hash  (cost=4.46..4.46 rows=246 width=28)
-				->  Seq Scan on t_class  (cost=0.00..4.46 rows=246 width=28)
+				->  Seq Scan on t_class  (cost=0.00..4.46 rows=246 width=28)              //在DN1中，表t_class的数据行数为246
 	(8 rows)
 
-	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中tc_class表的class_id字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中tc_class表的class_id字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
+
+	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中t_student表的class_id字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中t_student表的class_id字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
 	在整个sql语句执行过程中：
 		向squeue写入数据不是一次性将所有class_id数据写入，而是分多次写入
 		从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待
 		DN1的涉及的处理
-			DN1将本地节点中表t_class的class_id字段写入进自己的squeue中，并读取DN2节点中squeue的数据；DN1对本地节点中表t_student、t_class依据class_id进行join操作；DN1对本地节点表t_student、DN2中t_class表，依据从DN2的squeue获取的class_id进行join操作；最后依次返回join的结果。
+			DN1将本地节点中表t_student的class_id字段写入进自己的squeue中，并读取DN2节点中squeue的数据；DN1对本地节点中表t_student和t_class依据class_id进行join操作；DN2对本地节点表t_class和从squeue获取的数据依据class_id进行join操作；最后依次返回join的结果。
 			DN1在从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待。
 
 		DN2的涉及的处理
-			DN2将本地节点中表t_class的class_id字段写入进自己的squeue中（不是一次性将所有class_id数据写入，而是分多次写入），并读取DN1节点中squeue的数据；DN2对本地节点中表t_student、t_class依据class_id进行join操作；DN2对本地节点表t_student、DN1中t_class表，依据从DN1的squeue获取的class_id进行join操作；最后依次返回join的结果。
+			DN2将本地节点中表t_student的class_id字段写入进自己的squeue中（不是一次性将所有class_id数据写入，而是分多次写入），并读取DN1节点中squeue的数据；DN2对本地节点中表t_student和t_class依据class_id进行join操作；DN1对本地节点表t_class和从squeue获取的数据依据class_id进行join操作；最后依次返回join的结果。
+
+
+进程变化：
+	使用命令”./psql -p 5432 -d postgres“连接CN1时，CN1创建子进程和其进行交互。
+	在”psql“中输入sql语句”select * from t_student inner  join t_class on t_class.class_id=t_student.class_id“，DN1、DN2分别创建如下三个子进程
+		zq       16498 12143  0 16:02 ?        00:00:00 postgres: zq postgres ::1(50030) idle
+		zq       16503 12144  0 16:02 ?        00:00:00 postgres: zq postgres ::1(38548) idle
+		zq       17020 12143  0 16:04 ?        00:00:00 postgres: zq postgres ::1(50062) idle
+		zq       17022 12144  0 16:04 ?        00:00:00 postgres: zq postgres ::1(38574) idle
+		zq       17381 12143  0 16:04 ?        00:00:00 postgres: zq postgres ::1(50070) idle
+		zq       17383 12144  0 16:04 ?        00:00:00 postgres: zq postgres ::1(38582) idle
+
+	在进程”16503“中调试”PortalRun“的过程中，进程状态变化如下：
+		zq       16498 12143  0 16:02 ?        00:00:00 postgres: zq postgres ::1(50030) REMOTE SUBPLAN (coord1:41718) (D:datanode_2:17022)
+		zq       16503 12144  0 16:02 ?        00:00:00 postgres: zq postgres ::1(38548) REMOTE SUBPLAN (coord1:41718) (D:datanode_2:17022)
+		zq       17020 12143  0 16:04 ?        00:00:00 postgres: zq postgres ::1(50062) REMOTE SUBPLAN (coord1:41718) (C:coord1:41718)
+		zq       17022 12144  0 16:04 ?        00:00:00 postgres: zq postgres ::1(38574) REMOTE SUBPLAN (coord1:41718) (C:coord1:41718)
+		zq       17381 12143  0 16:04 ?        00:00:00 postgres: zq postgres ::1(50070) REMOTE SUBPLAN (coord1:41718) (D:datanode_1:17020)
+		zq       17383 12144  0 16:04 ?        00:00:00 postgres: zq postgres ::1(38582) REMOTE SUBPLAN (coord1:41718) (D:datanode_1:17020)
+
+		zq       16498 12143  0 16:02 ?        00:00:00 postgres: zq postgres ::1(50030) idle
+		zq       16503 12144  0 16:02 ?        00:00:00 postgres: zq postgres ::1(38548) RESET
+		zq       17020 12143  0 16:04 ?        00:00:00 postgres: zq postgres ::1(50062) idle
+		zq       17022 12144  0 16:04 ?        00:00:00 postgres: zq postgres ::1(38574) COMMIT
+		zq       17381 12143  0 16:04 ?        00:00:00 postgres: zq postgres ::1(50070) idle
+		zq       17383 12144  0 16:04 ?        00:00:00 postgres: zq postgres ::1(38582) idle
 
 
 
 
+涉及squeue的子执行计划示例：其中”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布的squeue
+Fp_1_d6ab_4.Remote Subplan. {
+	REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
+		HASHJOIN: startup_cost 7.54: total_cost 21.48: plan_rows 307: plan_width 568: parallel_aware false: parallel_safe true: plan_node_id 1: targetlist({
+			TARGETENTRY: expr {
+				VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+			}: resno 1: resname student_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 1: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+				default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+			}: resno 2: resname name: ressortgroupref 0: resorigtbl public t_student: resorigcol 2: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+				default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+			}: resno 3: resname gender: ressortgroupref 0: resorigtbl public t_student: resorigcol 3: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65001: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+			}: resno 4: resname age: ressortgroupref 0: resorigtbl public t_student: resorigcol 4: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+			}: resno 5: resname class_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 5: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65001: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+				default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+			}: resno 6: resname comment: ressortgroupref 0: resorigtbl public t_student: resorigcol 6: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+			}: resno 7: resname class_id: ressortgroupref 0: resorigtbl public t_class: resorigcol 1: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65000: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+				default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+			}: resno 8: resname class_name: ressortgroupref 0: resorigtbl public t_class: resorigcol 2: resjunk false
+		} {
+			TARGETENTRY: expr {
+				VAR: varno 65000: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+				default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+			}: resno 9: resname headmaster: ressortgroupref 0: resorigtbl public t_class: resorigcol 3: resjunk false
+		}): qual < >: lefttree {
+			REMOTESUBPLAN: startup_cost 100.00: total_cost 381.50: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe false: plan_node_id 2: targetlist({
+				TARGETENTRY: expr {
+					VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+				}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+					default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+				}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+					default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+				}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+				}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+				}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+					default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+				}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			}): qual < >: lefttree {
+				SEQSCAN: startup_cost 0.00: total_cost 9.00: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe true: plan_node_id 3: targetlist({
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+					}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+					}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+					}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+					}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+					}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+					}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 1
+			}: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 0: distributionType H: distributionKey 5: distributionNodes(i 0 1): distributionRestrict(i 0 1): nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0
+		}: righttree {
+			HASH: startup_cost 4.46: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 4: targetlist({
+				TARGETENTRY: expr {
+					VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location - 1
+				}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+					default -1: varlevelsup 0: varnoold 2: varoattno 2: location - 1
+				}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			} {
+				TARGETENTRY: expr {
+					VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+					default -1: varlevelsup 0: varnoold 2: varoattno 3: location - 1
+				}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			}): qual < >: lefttree {
+				SEQSCAN: startup_cost 0.00: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 5: targetlist({
+					TARGETENTRY: expr {
+						VAR: varno 2: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+					}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 2: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+					}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 2: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+					}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 2
+			}: righttree < >: initPlan < >: extParam(b): allParam(b): skewTable public t_student: skewColumn 5: skewInherit false
+		}: initPlan < >: extParam(b): allParam(b): jointype 0: inner_unique false: joinqual < >: hashclauses({
+			OPEXPR: opno pg_catalog = pg_catalog int4 pg_catalog int4: opfuncid pg_catalog int4eq 2 pg_catalog int4 pg_catalog int4: opresulttype pg_catalog bool: opretset false: opcollid < > < > -1: inputcollid < > < > -1: args({
+				VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 41
+			} {
+				VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 60
+			}): location - 1
+		})
+	}: rtable({
+		RTE: alias < >: eref {
+			ALIAS: aliasname t_student: colnames("student_id"
+				"name"
+				"gender"
+				"age"
+				"class_id"
+				"comment")
+		}: rtekind 0: relkind r: relid public t_student: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12 13 14 15): insertedCols(b): updatedCols(b): securityQuals < >
+	} {
+		RTE: alias < >: eref {
+			ALIAS: aliasname t_class: colnames("class_id"
+				"class_name"
+				"headmaster")
+		}: rtekind 0: relkind r: relid public t_class: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12): insertedCols(b): updatedCols(b): securityQuals < >
+	} {
+		RTE: alias < >: eref {
+			ALIAS: aliasname unnamed_join: colnames("student_id"
+				"name"
+				"gender"
+				"age"
+				"class_id"
+				"comment"
+				"class_id"
+				"class_name"
+				"headmaster")
+		}: rtekind 2: jointype 0: joinaliasvars < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b): insertedCols(b): updatedCols(b): securityQuals < >
+	}): resultRelations < >: subplans < >: nParamExec 0: nParamRemote 0: rowMarks < >: distributionType O: distributionKey 0: distributionNodes < >: distributionRestrict < >
+}
 
 
 
