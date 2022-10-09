@@ -76,7 +76,19 @@
 
 （2）================squeue通信执行流程
 1、绑定squeue：
-在函数”PortalStart“中，针对”portal->strategy“为”PORTAL_DISTRIBUTED“的情况下，调用函数”CreateQueryDesc“创建QueryDesc；在”single execution“情况下，调用函数”SharedQueueBind“进行squeue的绑定
+在函数”PortalStart“中，
+	针对”portal->strategy“为”PORTAL_DISTRIBUTED“的情况下：
+		第一步：调用函数”CreateQueryDesc“创建QueryDesc；
+		第二步：判断是否避免“single execution”
+			是
+				第一步：调用函数“RemoteSubplanMakeUnique”确保squeue的名称不重复
+				第二步：调用函数“ExecutorStart”
+				第三步：调用函数“createLocator”
+				第四步：调用函数“CreateDestReceiver”
+
+			否
+				第一步：调用函数”SharedQueueBind“指定“portal->name”为名称进行squeue绑定和返回
+				第二步：如果作为生产者，依次执行ExecutorStart、createLocator、CreateDestReceiver；如果不是生产者，则执行ExecCleanTypeFromTL
 
 
 2、构建向squeue写入数据的生产者：
@@ -105,8 +117,10 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 				........
 				for (;;){
 					........
+					slot = ExecProcNode(planstate);  //执行plan获取tuple，例如：通过函数指针调用”ExecSeqScan“遍历DN获取数据
+					........
 					if (sendTuples){
-						if (!((*dest->receiveSlot) (slot, dest)))     //绑定函数”producerReceiveSlot“，通过"producerReceiveSlot内的SharedQueueWrite"将tuple写入squeue
+						if (!((*dest->receiveSlot) (slot, dest)))     //绑定函数”producerReceiveSlot“，通过"producerReceiveSlot内的SharedQueueWrite"将slot中的tuple写入squeue
 							break;
 					}
 					........
@@ -136,7 +150,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 									* the list.
 									*/
 								lc = lnext(lc);
-								AdvanceProducingPortal(p, false);   //在该函数中，调用“ExecutorRun->producerReceiveSlot->SharedQueueWrite”将tuple写入到squeue中，供消费者使用
+								AdvanceProducingPortal(p, false);   //在该函数中，依次调用“ExecutorRun->standard_ExecutorRun->ExecutePlan->producerReceiveSlot->SharedQueueWrite”
 							}
 							continue;
 						}else{
@@ -165,7 +179,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 							为空：则调用函数“PortalRunSelect”获取结果的所需部分
 					第二步：如果是从squeue中获取本地数据，则此时作为消费者，进行如下处理：
 						第一步：调用函数“MakeSingleTupleTableSlot”，准备一个独立的slot用于接收tuples
-						第二步：进入循环处理中，在循环中，调用函数“SharedQueueRead”从squeue中读取数据；当slot为空后，通过函数“AdvanceProducingPortal”调用“SharedQueueWrite”向squeue写	入数据；通过函数指针“dest->receiveSlot”调用绑定的函数“printtup”进行tuple发送
+						第二步：进入循环处理中，在循环中，调用函数“SharedQueueRead”从squeue中读取数据；当slot为空后，通过函数“AdvanceProducingPortal”调用“SharedQueueWrite”向squeue写入数据；通过函数指针“dest->receiveSlot”调用绑定的函数“printtup”进行tuple发送
 						第三步：通过函数指针“dest->rShutdown”执行绑定函数
 						第四步：执行函数“ExecDropSingleTupleTableSlot”释放创建的slot
 					第三步：将portal标记为非激活“PORTAL_READY”状态
@@ -227,7 +241,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 
-（4）使用SQL语句示例
+（4）使用SQL语句示例（在CN上使用该语句）
 	explain  select * from t_student inner  join t_class on t_class.class_id=t_student.class_id;
 													QUERY PLAN
 	-------------------------------------------------------------------------------------------------------------
@@ -282,7 +296,8 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 
-涉及squeue的子执行计划示例：其中”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布的squeue
+涉及squeue的子执行计划示例如下所示：
+	其中”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布，对于“cursor”的设置由“src/backend/optimizer/plan/createplan.c”中函数“get_internal_cursor”完成设置。
 Fp_1_d6ab_4.Remote Subplan. {
 	REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
 		HASHJOIN: startup_cost 7.54: total_cost 21.48: plan_rows 307: plan_width 568: parallel_aware false: parallel_safe true: plan_node_id 1: targetlist({
