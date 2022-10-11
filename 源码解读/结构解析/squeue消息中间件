@@ -119,7 +119,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 					........
 					slot = ExecProcNode(planstate);  //执行plan获取tuple，例如：通过函数指针调用”ExecSeqScan“遍历DN获取数据
 					........
-					if (sendTuples){
+					if (sendTuples){     //通过函数指针”receiveSlot“发送tuple存在两种方式，一是”绑定函数printtup“；二是”绑定函数producerReceiveSlot“
 						if (!((*dest->receiveSlot) (slot, dest)))     //绑定函数”producerReceiveSlot“，通过"producerReceiveSlot内的SharedQueueWrite"将slot中的tuple写入squeue
 							break;
 					}
@@ -242,6 +242,12 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 （4）使用SQL语句示例（在CN上使用该语句）
+	表创建语句：
+		CREATE TABLE t_class(class_id int primary key,class_name varchar(20) not null,Headmaster varchar(20)) distribute by hash(class_id);
+		CREATE TABLE t_student(student_id int primary key,name varchar(20) not null,gender varchar(10),age int,class_id int, comment varchar(2000)) distribute by hash(student_id);
+		INSERT INTO t_class(class_id,class_name,Headmaster) select n,'班级_'||n,'Headmaster_'||n from generate_series(1,500) n;
+		INSERT INTO t_student(student_id,name,gender,age,class_id) select n,'学生_'||n,(case when random()<0.5 then 1 else 2 end ),floor(random()*4+10),floor(random()*500)+1 from generate_series(1,5000) n;
+
 	explain  select * from t_student inner  join t_class on t_class.class_id=t_student.class_id;
 													QUERY PLAN
 	-------------------------------------------------------------------------------------------------------------
@@ -256,16 +262,18 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 	(8 rows)
 
 
-	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中t_student表的class_id字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中t_student表的class_id字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
+	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中t_student表的数据字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中t_student表的数据字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
+		写入到squeue中的tuple数据，之后会通过函数”printtup“依据”版本3.0的协议，添加标识符D，包装成Data Row“进行数据传输；在这一过程中是DN1与DN2之间的直接通信，不涉及与CN的数据交互
+		由于存在join条件”t_student.class_id = t_class.class_id“，故可以通过应用”hash distribution function“定位”t_class.class_id“关联的数据字段是在DN1还是DN2
 	在整个sql语句执行过程中：
 		向squeue写入数据不是一次性将所有class_id数据写入，而是分多次写入
 		从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待
 		DN1的涉及的处理
-			DN1将本地节点中表t_student的class_id字段写入进自己的squeue中，并读取DN2节点中squeue的数据；DN1对本地节点中表t_student和t_class依据class_id进行join操作；DN2对本地节点表t_class和从squeue获取的数据依据class_id进行join操作；最后依次返回join的结果。
-			DN1在从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待。
+			DN1将本地节点中表t_student的数据字段写入进自己的squeue中，并读取DN2节点中squeue的数据；DN1对本地节点中表t_student和t_class依据class_id进行join操作；DN2对本地节点表t_class和从squeue获取的数据依据class_id进行join操作；最后依次返回join的结果。
+			DN1在从squeue中读取表t_student数据时，也是多次读取，一旦squeue中没有数据就进行等待。
 
 		DN2的涉及的处理
-			DN2将本地节点中表t_student的class_id字段写入进自己的squeue中（不是一次性将所有class_id数据写入，而是分多次写入），并读取DN1节点中squeue的数据；DN2对本地节点中表t_student和t_class依据class_id进行join操作；DN1对本地节点表t_class和从squeue获取的数据依据class_id进行join操作；最后依次返回join的结果。
+			DN2将本地节点中表t_student的数据字段写入进自己的squeue中（不是一次性将所有class_id数据写入，而是分多次写入），并读取DN1节点中squeue的数据；DN2对本地节点中表t_student和t_class依据class_id进行join操作；DN1对本地节点表t_class和从squeue获取的数据依据class_id进行join操作；最后依次返回join的结果。
 
 
 进程变化：
@@ -297,7 +305,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 涉及squeue的子执行计划示例如下所示：
-	其中”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布，对于“cursor”的设置由“src/backend/optimizer/plan/createplan.c”中函数“get_internal_cursor”完成设置。
+	其中”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布，对于“cursor”的设置由“src/backend/optimizer/plan/createplan.c”中函数“get_internal_cursor”完成设置，该”cursor“的名称同”portal的名称“、”squeue的名称“相关联。
 Fp_1_d6ab_4.Remote Subplan. {
 	REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
 		HASHJOIN: startup_cost 7.54: total_cost 21.48: plan_rows 307: plan_width 568: parallel_aware false: parallel_safe true: plan_node_id 1: targetlist({
@@ -470,3 +478,5 @@ Fp_1_d6ab_4.Remote Subplan. {
 
 
 
+
+参考链接：https://dba.stackexchange.com/questions/73492/postgres-xc-and-mpp
