@@ -177,18 +177,13 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 								确保生产者正在推进，此时作为生产者，如果“ExecutorFinish不是done”调用函数“AdvanceProducingPortal”执行"portal's query"，并将tuple分发给消费者；调用函数“RunFromStore”（该函数通过dest->receiveSlot绑定函数“printtup”进行tuple发送）从”portal's tuple store“获取tuple
 
 							为空：则调用函数“PortalRunSelect”获取结果的所需部分
-					第二步：如果是从squeue中获取本地数据，则此时作为消费者，进行如下处理：
+					第二步：如果是从squeue中获取数据，则此时作为消费者，进行如下处理：
 						第一步：调用函数“MakeSingleTupleTableSlot”，准备一个独立的slot用于接收tuples
-						第二步：进入循环处理中，在循环中，调用函数“SharedQueueRead”从squeue中读取数据；当slot为空后，通过函数“AdvanceProducingPortal”调用“SharedQueueWrite”向squeue写入数据；通过函数指针“dest->receiveSlot”调用绑定的函数“printtup”进行tuple发送
+						第二步：进入循环处理中，在循环中，调用函数“SharedQueueRead”从squeue中读取数据；当slot为空后，调用函数“AdvanceProducingPortal”执行portal；通过函数指针“dest->receiveSlot”调用绑定的函数“printtup”进行tuple发送
 						第三步：通过函数指针“dest->rShutdown”执行绑定函数
 						第四步：执行函数“ExecDropSingleTupleTableSlot”释放创建的slot
 					第三步：将portal标记为非激活“PORTAL_READY”状态
 			第四步：使用catch对捕捉的异常进行处理
-
-
-
-	RunFromStore
-	do_tup_output
 
 
 
@@ -216,8 +211,25 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 在函数”PortalCleanup“中，针对”portal->strategy == PORTAL_DISTRIBUTED“的情况下，调用函数”SharedQueueUnBind“进行squeue解绑定；调用函数”SharedQueueReset“进行squeue清理
 
 
+（3）================如何确定数据是否应该写入squeue
+在函数”ExecutePlan“中，通过函数指针”(*dest->receiveSlot) (slot, dest)“调用”producerReceiveSlot“函数
+在文件”src/backend/executor/producerReceiver.c“定义的函数”producerReceiveSlot“用于确定数据是该写入squeue，还是保存在tuplestore
+	该函数的介绍如下所示：
+		第一步：获取slot中当前tuple的attribute
+		第二步：通过函数”GET_NODES“调用”locate_hash_insert“计算数据存储关联的DN
+		第三步：进行循环遍历，
+			如果生成的数据不用于squeue消费，则通过函数指针”myState->consumer->receiveSlot“调用函数”tstoreReceiveSlot_notoast“将数据存储到tuplestore
+			如果生成的数据用于squeue消费，则执行调用函数”SharedQueueWrite“写入到squeue中
 
-（3）================结合日志分析流程
+
+
+
+
+
+
+
+
+（4）================结合日志分析流程
 	-----------每个DN会创建作为消费者存在的子进程、作为生产者存在的消费者----------
 
 	创建portal：Created portal p_1_682c_1 and inserted an entry in the has table
@@ -241,7 +253,7 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 
-（4）使用SQL语句示例（在CN上使用该语句）
+（5）使用SQL语句示例（在CN上使用该语句）
 	表创建语句：
 		CREATE TABLE t_class(class_id int primary key,class_name varchar(20) not null,Headmaster varchar(20)) distribute by hash(class_id);
 		CREATE TABLE t_student(student_id int primary key,name varchar(20) not null,gender varchar(10),age int,class_id int, comment varchar(2000)) distribute by hash(student_id);
@@ -264,7 +276,9 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中t_student表的数据字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中t_student表的数据字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
 		写入到squeue中的tuple数据，之后会通过函数”printtup“依据”版本3.0的协议，添加标识符D，包装成Data Row“进行数据传输；在这一过程中是DN1与DN2之间的直接通信，不涉及与CN的数据交互
-		由于存在join条件”t_student.class_id = t_class.class_id“，故可以通过应用”hash distribution function“定位”t_class.class_id“关联的数据字段是在DN1还是DN2
+		由于存在join条件”t_student.class_id = t_class.class_id“，故可以通过应用”hash distribution function“定位与”t_class.class_id“进行join的t_student数据字段最终是存到DN1还是DN2上
+		在DN1中scan表t_student后的数据分两部分存储，一部分用于和DN2中的t_class进行join，这部分数据存储到DN1中的squeue中；另一部分用于和DN1中的t_class进行join，就存储在DN1中的tuplestore中
+		在DN2中scan表t_student后的数据分两部分存储，一部分用于和DN1中的t_class进行join，这部分数据存储到DN2中的squeue中；另一部分用于和DN2中的t_class进行join，就存储在DN2中的tuplestore中
 	在整个sql语句执行过程中：
 		向squeue写入数据不是一次性将所有class_id数据写入，而是分多次写入
 		从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待
