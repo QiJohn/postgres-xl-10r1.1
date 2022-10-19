@@ -275,10 +275,10 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 	在执行该sql语句的过程中，进行”Remote Subquery Scan on all (datanode_1,datanode_2) Distribute results by H: class_id“时，涉及使用squeue进行数据交换（即DN1读取本地节点中t_student表的数据字段，并将其写入自己的squeue中，供DN2进行joining时使用；同时DN2读取本地节点中t_student表的数据字段，并将其写入到自己的squeue中，供DN1进行joining时使用）
-		写入到squeue中的tuple数据，之后会通过函数”printtup“依据”版本3.0的协议，添加标识符D，包装成Data Row“进行数据传输；在这一过程中是DN1与DN2之间的直接通信，不涉及与CN的数据交互
-		由于存在join条件”t_student.class_id = t_class.class_id“，故可以通过应用”hash distribution function“定位与”t_class.class_id“进行join的t_student数据字段最终是存到DN1还是DN2上
-		在DN1中scan表t_student后的数据分两部分存储，一部分用于和DN2中的t_class进行join，这部分数据存储到DN1中的squeue中；另一部分用于和DN1中的t_class进行join，就存储在DN1中的tuplestore中
-		在DN2中scan表t_student后的数据分两部分存储，一部分用于和DN1中的t_class进行join，这部分数据存储到DN2中的squeue中；另一部分用于和DN2中的t_class进行join，就存储在DN2中的tuplestore中
+		1、写入到squeue中的tuple数据，在“ExecRemoteSubplan函数中通过函数pgxc_node_send_execute使用tcp发送portal”，在其它进程收到portal并执行时，通过函数”printtup“依据”版本3.0的协议，添加标识符D，包装成Data Row“进行数据传输；在这一过程中是DN1与DN2之间的直接通信，不涉及与CN的数据交互
+		2、由于存在join条件”t_student.class_id = t_class.class_id“，故可以通过应用”hash distribution function“定位与”t_class.class_id“进行join的t_student数据字段最终是存到DN1还是DN2上
+		3、在DN1中scan表t_student后的数据分两部分存储，一部分用于和DN2中的t_class进行join，这部分数据存储到DN1中的squeue中；另一部分用于和DN1中的t_class进行join，就存储在DN1中的tuplestore中
+		4、在DN2中，t_student数据分两类，“类1”用于和DN1中t_class进行join，“类2”用于和DN2中t_class进行join；进程48209通过“pgxc_node_send_execute”分别向DN1和DN2发送待执行的portal（例如p_1_bc47_1）；进程48215在收到待执行的portal时，先作为生产者将"类1"数据写入squeue，并随后将“类2”数据使用“printtup”函数发送给DN2；进程48219在收到待执行的portal时，作为消费者读取squeue数据并使用函数“printtup”进行数据发送（即负责将“类1”数据发送给DN1）;
 	在整个sql语句执行过程中：
 		向squeue写入数据不是一次性将所有class_id数据写入，而是分多次写入
 		从squeue中读取class_id数据时，也是多次读取，一旦squeue中没有数据就进行等待
@@ -318,177 +318,474 @@ exec_simple_query-->CreateDestReceiver-->CreateProducerDestReceiver
 
 
 
-涉及squeue的子执行计划示例如下所示：
-	其中”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布，对于“cursor”的设置由“src/backend/optimizer/plan/createplan.c”中函数“get_internal_cursor”完成设置，该”cursor“的名称同”portal的名称“、”squeue的名称“相关联。
-Fp_1_d6ab_4.Remote Subplan. {
-	REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
-		HASHJOIN: startup_cost 7.54: total_cost 21.48: plan_rows 307: plan_width 568: parallel_aware false: parallel_safe true: plan_node_id 1: targetlist({
-			TARGETENTRY: expr {
-				VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
-			}: resno 1: resname student_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 1: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-				default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
-			}: resno 2: resname name: ressortgroupref 0: resorigtbl public t_student: resorigcol 2: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
-				default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
-			}: resno 3: resname gender: ressortgroupref 0: resorigtbl public t_student: resorigcol 3: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65001: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
-			}: resno 4: resname age: ressortgroupref 0: resorigtbl public t_student: resorigcol 4: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
-			}: resno 5: resname class_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 5: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65001: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
-				default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
-			}: resno 6: resname comment: ressortgroupref 0: resorigtbl public t_student: resorigcol 6: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
-			}: resno 7: resname class_id: ressortgroupref 0: resorigtbl public t_class: resorigcol 1: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65000: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-				default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
-			}: resno 8: resname class_name: ressortgroupref 0: resorigtbl public t_class: resorigcol 2: resjunk false
-		} {
-			TARGETENTRY: expr {
-				VAR: varno 65000: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-				default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
-			}: resno 9: resname headmaster: ressortgroupref 0: resorigtbl public t_class: resorigcol 3: resjunk false
-		}): qual < >: lefttree {
-			REMOTESUBPLAN: startup_cost 100.00: total_cost 381.50: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe false: plan_node_id 2: targetlist({
-				TARGETENTRY: expr {
-					VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
-				}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+涉及squeue的子执行计划示例如下所示：共有四个执行计划“Fp_1_d6ab_4.Remote Subplan”、“Fp_1_d6ab_2.Remote Subplan”、“p_1_d6ab_3.Remote Subplan”、“p_1_d6ab_1.Remote Subplan”
+	1、其中执行计划“Fp_1_d6ab_4.Remote Subplan”和“Fp_1_d6ab_2.Remote Subplan”除了“子计划名称”、“cursor的值”不同，其它内容相同；子计划“p_1_d6ab_3.Remote Subplan”和“p_1_d6ab_1.Remote Subplan”除了“子计划名称”不同，其它内容都相同
+	2、在“Fp_1_d6ab_4.Remote Subplan”中，”distributionType H: distributionKey 5: ................: nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0“表示涉及重分布，对于“cursor”的设置由“src/backend/optimizer/plan/createplan.c”中函数“get_internal_cursor”完成设置，该”cursor“的名称同”portal的名称“、”squeue的名称“、“子执行计划名称”相关联。
+	3、各执行计划具体内容如下所示：
+		Fp_1_d6ab_4.Remote Subplan. {
+			REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
+				HASHJOIN: startup_cost 7.54: total_cost 21.48: plan_rows 307: plan_width 568: parallel_aware false: parallel_safe true: plan_node_id 1: targetlist({
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+					}: resno 1: resname student_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 1: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+					}: resno 2: resname name: ressortgroupref 0: resorigtbl public t_student: resorigcol 2: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+					}: resno 3: resname gender: ressortgroupref 0: resorigtbl public t_student: resorigcol 3: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+					}: resno 4: resname age: ressortgroupref 0: resorigtbl public t_student: resorigcol 4: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+					}: resno 5: resname class_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 5: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+					}: resno 6: resname comment: ressortgroupref 0: resorigtbl public t_student: resorigcol 6: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+					}: resno 7: resname class_id: ressortgroupref 0: resorigtbl public t_class: resorigcol 1: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65000: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+					}: resno 8: resname class_name: ressortgroupref 0: resorigtbl public t_class: resorigcol 2: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65000: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+					}: resno 9: resname headmaster: ressortgroupref 0: resorigtbl public t_class: resorigcol 3: resjunk false
+				}): qual < >: lefttree {
+					REMOTESUBPLAN: startup_cost 100.00: total_cost 381.50: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe false: plan_node_id 2: targetlist({
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+						}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+						}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+						}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+						}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+						}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+						}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					}): qual < >: lefttree {
+						SEQSCAN: startup_cost 0.00: total_cost 9.00: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe true: plan_node_id 3: targetlist({
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+							}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+							}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+							}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+							}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+							}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+							}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 1
+					}: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 0: distributionType H: distributionKey 5: distributionNodes(i 0 1): distributionRestrict(i 0 1): nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0
+				}: righttree {
+					HASH: startup_cost 4.46: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 4: targetlist({
+						TARGETENTRY: expr {
+							VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location - 1
+						}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 2: varoattno 2: location - 1
+						}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 2: varoattno 3: location - 1
+						}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					}): qual < >: lefttree {
+						SEQSCAN: startup_cost 0.00: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 5: targetlist({
+							TARGETENTRY: expr {
+								VAR: varno 2: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+							}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 2: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+							}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 2: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+							}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 2
+					}: righttree < >: initPlan < >: extParam(b): allParam(b): skewTable public t_student: skewColumn 5: skewInherit false
+				}: initPlan < >: extParam(b): allParam(b): jointype 0: inner_unique false: joinqual < >: hashclauses({
+					OPEXPR: opno pg_catalog = pg_catalog int4 pg_catalog int4: opfuncid pg_catalog int4eq 2 pg_catalog int4 pg_catalog int4: opresulttype pg_catalog bool: opretset false: opcollid < > < > -1: inputcollid < > < > -1: args({
+						VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 41
+					} {
+						VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 60
+					}): location - 1
+				})
+			}: rtable({
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_student: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment")
+				}: rtekind 0: relkind r: relid public t_student: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12 13 14 15): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				TARGETENTRY: expr {
-					VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-					default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
-				}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_class: colnames("class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 0: relkind r: relid public t_class: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				TARGETENTRY: expr {
-					VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
-					default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
-				}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				RTE: alias < >: eref {
+					ALIAS: aliasname unnamed_join: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment"
+						"class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 2: jointype 0: joinaliasvars < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b): insertedCols(b): updatedCols(b): securityQuals < >
+			}): resultRelations < >: subplans < >: nParamExec 0: nParamRemote 0: rowMarks < >: distributionType O: distributionKey 0: distributionNodes < >: distributionRestrict < >
+		}
+
+
+		Fp_1_d6ab_2.Remote Subplan. {
+			REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
+				HASHJOIN: startup_cost 7.54: total_cost 21.48: plan_rows 307: plan_width 568: parallel_aware false: parallel_safe true: plan_node_id 1: targetlist({
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+					}: resno 1: resname student_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 1: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+					}: resno 2: resname name: ressortgroupref 0: resorigtbl public t_student: resorigcol 2: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+					}: resno 3: resname gender: ressortgroupref 0: resorigtbl public t_student: resorigcol 3: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+					}: resno 4: resname age: ressortgroupref 0: resorigtbl public t_student: resorigcol 4: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+					}: resno 5: resname class_id: ressortgroupref 0: resorigtbl public t_student: resorigcol 5: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65001: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+					}: resno 6: resname comment: ressortgroupref 0: resorigtbl public t_student: resorigcol 6: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+					}: resno 7: resname class_id: ressortgroupref 0: resorigtbl public t_class: resorigcol 1: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65000: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+					}: resno 8: resname class_name: ressortgroupref 0: resorigtbl public t_class: resorigcol 2: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 65000: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+					}: resno 9: resname headmaster: ressortgroupref 0: resorigtbl public t_class: resorigcol 3: resjunk false
+				}): qual < >: lefttree {
+					REMOTESUBPLAN: startup_cost 100.00: total_cost 381.50: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe false: plan_node_id 2: targetlist({
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+						}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+						}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+						}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+						}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+						}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+						}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					}): qual < >: lefttree {
+						SEQSCAN: startup_cost 0.00: total_cost 9.00: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe true: plan_node_id 3: targetlist({
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+							}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+							}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+							}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+							}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+							}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+							}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 1
+					}: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 0: distributionType H: distributionKey 5: distributionNodes(i 0 1): distributionRestrict(i 0 1): nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_1: unique 0
+				}: righttree {
+					HASH: startup_cost 4.46: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 4: targetlist({
+						TARGETENTRY: expr {
+							VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location - 1
+						}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 2: varoattno 2: location - 1
+						}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					} {
+						TARGETENTRY: expr {
+							VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+							default -1: varlevelsup 0: varnoold 2: varoattno 3: location - 1
+						}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+					}): qual < >: lefttree {
+						SEQSCAN: startup_cost 0.00: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 5: targetlist({
+							TARGETENTRY: expr {
+								VAR: varno 2: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+							}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 2: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+							}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						} {
+							TARGETENTRY: expr {
+								VAR: varno 2: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+								default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+							}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+						}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 2
+					}: righttree < >: initPlan < >: extParam(b): allParam(b): skewTable public t_student: skewColumn 5: skewInherit false
+				}: initPlan < >: extParam(b): allParam(b): jointype 0: inner_unique false: joinqual < >: hashclauses({
+					OPEXPR: opno pg_catalog = pg_catalog int4 pg_catalog int4: opfuncid pg_catalog int4eq 2 pg_catalog int4 pg_catalog int4: opresulttype pg_catalog bool: opretset false: opcollid < > < > -1: inputcollid < > < > -1: args({
+						VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 41
+					} {
+						VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 60
+					}): location - 1
+				})
+			}: rtable({
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_student: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment")
+				}: rtekind 0: relkind r: relid public t_student: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12 13 14 15): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				TARGETENTRY: expr {
-					VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
-				}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_class: colnames("class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 0: relkind r: relid public t_class: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				TARGETENTRY: expr {
-					VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
-				}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
-			} {
-				TARGETENTRY: expr {
-					VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
-					default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
-				}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
-			}): qual < >: lefttree {
+				RTE: alias < >: eref {
+					ALIAS: aliasname unnamed_join: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment"
+						"class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 2: jointype 0: joinaliasvars < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b): insertedCols(b): updatedCols(b): securityQuals < >
+			}): resultRelations < >: subplans < >: nParamExec 0: nParamRemote 0: rowMarks < >: distributionType O: distributionKey 0: distributionNodes < >: distributionRestrict < >
+		}
+
+
+		p_1_d6ab_3.Remote Subplan. {
+			REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
 				SEQSCAN: startup_cost 0.00: total_cost 9.00: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe true: plan_node_id 3: targetlist({
 					TARGETENTRY: expr {
-						VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location 7
+						VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location - 1
 					}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
 						VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-						default -1: varlevelsup 0: varnoold 1: varoattno 2: location 7
+						default -1: varlevelsup 0: varnoold 1: varoattno 2: location - 1
 					}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
 						VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
-						default -1: varlevelsup 0: varnoold 1: varoattno 3: location 7
+						default -1: varlevelsup 0: varnoold 1: varoattno 3: location - 1
 					}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
-						VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location 7
+						VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location - 1
 					}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
-						VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 7
+						VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location - 1
 					}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
 						VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
-						default -1: varlevelsup 0: varnoold 1: varoattno 6: location 7
+						default -1: varlevelsup 0: varnoold 1: varoattno 6: location - 1
 					}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 1
-			}: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 0: distributionType H: distributionKey 5: distributionNodes(i 0 1): distributionRestrict(i 0 1): nodeList(i 0 1): execOnAll true: sort < >: cursor p_1_d6ab_3: unique 0
-		}: righttree {
-			HASH: startup_cost 4.46: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 4: targetlist({
-				TARGETENTRY: expr {
-					VAR: varno 65001: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location - 1
-				}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+			}: rtable({
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_student: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment")
+				}: rtekind 0: relkind r: relid public t_student: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 0: checkAsUser 0: selectedCols(b 10 11 12 13 14 15): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				TARGETENTRY: expr {
-					VAR: varno 65001: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-					default -1: varlevelsup 0: varnoold 2: varoattno 2: location - 1
-				}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_class: colnames("class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 0: relkind r: relid public t_class: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 0: checkAsUser 0: selectedCols(b 10 11 12): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				TARGETENTRY: expr {
-					VAR: varno 65001: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-					default -1: varlevelsup 0: varnoold 2: varoattno 3: location - 1
-				}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
-			}): qual < >: lefttree {
-				SEQSCAN: startup_cost 0.00: total_cost 4.46: plan_rows 246: plan_width 28: parallel_aware false: parallel_safe true: plan_node_id 5: targetlist({
+				RTE: alias < >: eref {
+					ALIAS: aliasname unnamed_join: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment"
+						"class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 2: jointype 0: joinaliasvars < >: lateral false: inh false: inFromCl true: requiredPerms 0: checkAsUser 0: selectedCols(b): insertedCols(b): updatedCols(b): securityQuals < >
+			}): resultRelations < >: subplans < >: nParamExec 0: nParamRemote 0: rowMarks < >: distributionType H: distributionKey 5: distributionNodes(i 0 1): distributionRestrict(i 0 1)
+		}
+
+
+		p_1_d6ab_1.Remote Subplan. {
+			REMOTESTMT: commandType 1: hasReturning false: parallelModeNeeded false: planTree {
+				SEQSCAN: startup_cost 0.00: total_cost 9.00: plan_rows 500: plan_width 540: parallel_aware false: parallel_safe true: plan_node_id 3: targetlist({
 					TARGETENTRY: expr {
-						VAR: varno 2: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 7
+						VAR: varno 1: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 1: location - 1
 					}: resno 1: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
-						VAR: varno 2: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-						default -1: varlevelsup 0: varnoold 2: varoattno 2: location 7
+						VAR: varno 1: varattno 2: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 2: location - 1
 					}: resno 2: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
 				} {
 					TARGETENTRY: expr {
-						VAR: varno 2: varattno 3: vartype pg_catalog varchar: vartypmod 24: varcollid pg_catalog
-						default -1: varlevelsup 0: varnoold 2: varoattno 3: location 7
+						VAR: varno 1: varattno 3: vartype pg_catalog varchar: vartypmod 14: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 3: location - 1
 					}: resno 3: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
-				}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 2
-			}: righttree < >: initPlan < >: extParam(b): allParam(b): skewTable public t_student: skewColumn 5: skewInherit false
-		}: initPlan < >: extParam(b): allParam(b): jointype 0: inner_unique false: joinqual < >: hashclauses({
-			OPEXPR: opno pg_catalog = pg_catalog int4 pg_catalog int4: opfuncid pg_catalog int4eq 2 pg_catalog int4 pg_catalog int4: opresulttype pg_catalog bool: opretset false: opcollid < > < > -1: inputcollid < > < > -1: args({
-				VAR: varno 65001: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location 41
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 4: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 4: location - 1
+					}: resno 4: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 5: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 1: varoattno 5: location - 1
+					}: resno 5: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				} {
+					TARGETENTRY: expr {
+						VAR: varno 1: varattno 6: vartype pg_catalog varchar: vartypmod 2004: varcollid pg_catalog
+						default -1: varlevelsup 0: varnoold 1: varoattno 6: location - 1
+					}: resno 6: resname < >: ressortgroupref 0: resorigtbl < > < >: resorigcol 0: resjunk false
+				}): qual < >: lefttree < >: righttree < >: initPlan < >: extParam(b): allParam(b): scanrelid 1
+			}: rtable({
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_student: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment")
+				}: rtekind 0: relkind r: relid public t_student: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 0: checkAsUser 0: selectedCols(b 10 11 12 13 14 15): insertedCols(b): updatedCols(b): securityQuals < >
 			} {
-				VAR: varno 65000: varattno 1: vartype pg_catalog int4: vartypmod - 1: varcollid < > < > -1: varlevelsup 0: varnoold 2: varoattno 1: location 60
-			}): location - 1
-		})
-	}: rtable({
-		RTE: alias < >: eref {
-			ALIAS: aliasname t_student: colnames("student_id"
-				"name"
-				"gender"
-				"age"
-				"class_id"
-				"comment")
-		}: rtekind 0: relkind r: relid public t_student: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12 13 14 15): insertedCols(b): updatedCols(b): securityQuals < >
-	} {
-		RTE: alias < >: eref {
-			ALIAS: aliasname t_class: colnames("class_id"
-				"class_name"
-				"headmaster")
-		}: rtekind 0: relkind r: relid public t_class: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b 10 11 12): insertedCols(b): updatedCols(b): securityQuals < >
-	} {
-		RTE: alias < >: eref {
-			ALIAS: aliasname unnamed_join: colnames("student_id"
-				"name"
-				"gender"
-				"age"
-				"class_id"
-				"comment"
-				"class_id"
-				"class_name"
-				"headmaster")
-		}: rtekind 2: jointype 0: joinaliasvars < >: lateral false: inh false: inFromCl true: requiredPerms 2: checkAsUser 0: selectedCols(b): insertedCols(b): updatedCols(b): securityQuals < >
-	}): resultRelations < >: subplans < >: nParamExec 0: nParamRemote 0: rowMarks < >: distributionType O: distributionKey 0: distributionNodes < >: distributionRestrict < >
-}
+				RTE: alias < >: eref {
+					ALIAS: aliasname t_class: colnames("class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 0: relkind r: relid public t_class: tablesample < >: lateral false: inh false: inFromCl true: requiredPerms 0: checkAsUser 0: selectedCols(b 10 11 12): insertedCols(b): updatedCols(b): securityQuals < >
+			} {
+				RTE: alias < >: eref {
+					ALIAS: aliasname unnamed_join: colnames("student_id"
+						"name"
+						"gender"
+						"age"
+						"class_id"
+						"comment"
+						"class_id"
+						"class_name"
+						"headmaster")
+				}: rtekind 2: jointype 0: joinaliasvars < >: lateral false: inh false: inFromCl true: requiredPerms 0: checkAsUser 0: selectedCols(b): insertedCols(b): updatedCols(b): securityQuals < >
+			}): resultRelations < >: subplans < >: nParamExec 0: nParamRemote 0: rowMarks < >: distributionType H: distributionKey 5: distributionNodes(i 0 1): distributionRestrict(i 0 1)
+		}
+
+
 
 
 
