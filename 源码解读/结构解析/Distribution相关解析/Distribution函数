@@ -1,0 +1,104 @@
+=================================================================================================
+=============================================set函数===============================================
+=================================================================================================
+
+1、============位于src/backend/optimizer/util/pathnode.c文件中的函数“set_scanpath_distribution”
+作用：该函数用于给“scan_path”的属性“Distribution”设置对应的值。只有当前"rte->relation"在relcache中存在“locator”对应的信息，才会设置Distribution，否则不做任何处理
+
+
+
+
+2、============位于src/backend/optimizer/util/pathnode.c文件中的函数“set_joinpath_distribution”
+作用：该函数用于分析join涉及的参数，并给“join_path”的属性“Distribution”设置对应的值，且每一种可能的“Distribution”都需要被返回（构建list返回），以供调用者选择代价最小的。
+	在该函数中，通过对“innerjoinpath->distribution”、“outerjoinpath->distribution”、“jointype”、“innerjoinpath->distribution->distributionType”、“outerjoinpath->distribution->distributionType”的判断进行不同的处理
+	其中以下四种情况可以不用通过重分布数据搞定：
+		（1）针对innerjoinpath、outerjoinpath都是replicated类型的Distribution
+		（2）针对innerjoinpath是replicated类型的Distribution；outerjoinpath不是replicated类型的Distribution
+		（3）针对outerjoinpath是replicated类型的Distribution；innerjoinpath不是replicated类型的Distribution
+		（4）innerjoinpath的Distribution不为空，同时outerjoinpath的Distribution为空；outerjoinpath的Distribution不为空，同时innerjoinpath的Distribution为空
+
+
+
+
+=================================================================================================
+===========================================adjust函数===============================================
+=================================================================================================
+
+1、============位于”src/backend/optimizer/plan/createplan.c“文件中的函数”adjust_subplan_distribution“
+作用：确保subplan的distribution和consumers是匹配的
+
+
+
+
+2、============位于”src/backend/optimizer/plan/planner.c“文件中的函数”adjust_path_distribution“
+作用：调整path的distribution以匹配ModifyTable的期望
+	（1）ModifyTable的期望存储在"root->distribution"中
+	（2）”root->distribution“为空，表示不存在ModifyTable的期望，可以不用处理
+	（3）”root->distribution“和”path->distribution“不匹配时，即不满足期望，需要进行调整处理；否则无需处理
+
+
+
+
+
+
+=================================================================================================
+===========================================match函数===============================================
+=================================================================================================
+
+1、============位于”src/backend/optimizer/plan/planner.c“文件中的函数”grouping_distribution_match“
+作用：核对”path distribution“是否匹配”grouping distribution“
+	（1）”path distribution“为空，或者”path distribution“类型为Replicated，则直接判断为匹配
+	（2）"path distribution"不存在”distributionExpr“直接判断为不匹配
+	（3）遍历groupclause，核对是否存在与”path->distribution”相匹配的
+
+
+
+
+2、============位于”src/backend/optimizer/plan/planner.c“文件中的函数”groupingsets_distribution_match“
+作用：核对"path distribution”是否匹配“grouping set”
+	（1）"path->distribution"不存在，或者“path->distribution->distributionType”类型为Replicated，则判断为匹配；否则不匹配
+	（2）匹配就可以直接将“grouping set”下发到remote node
+
+
+
+
+
+
+
+
+
+
+=================================================================================================
+===========================================其它函数===============================================
+=================================================================================================
+
+1、=============位于src/backend/optimizer/util/pathnode.c文件中的函数“redistribute_path“
+作用：重新分配path，以匹配所需的distribution参数
+	在该函数中，重分配path时进行如下分类处理：
+	（1）如果”innner path“是MaterialPath，构建RemoteSubPath，放置到目标node上的”store tuples“中，以避免通过网络进行发送；
+	（2）否则，构建RemoteSubPath，并使用pathkeys指定所需的排序顺序，如果subpath与顺序不匹配，则自动添加一个sort_path
+
+
+
+
+2、============位于src/backend/optimizer/util/pathnode.c文件中的函数“restrict_distribution“
+作用：分析 RestrictInfo 并决定是否可以限制分发节点（过滤分发节点）
+	（1）该函数目前只支持hansh join操作
+	（2）不支持OR条件表达式
+	（3）”distribution“或者”distribution->distributionExpr“为NULL时，不用处理
+
+
+
+3、============位于”src/backend/optimizer/plan/planner.c“文件中的函数”equal_distributions“
+作用：判断两个distributions是否等价
+	（1）归属于同一集合的node，且distributionType相同，则等价
+	（2）“distribution expressions”相同，或者成员归属的EquivalenceClass相同，则等价
+	（3）其它不等价
+
+
+
+
+
+
+
+
