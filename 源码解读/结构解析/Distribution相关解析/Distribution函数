@@ -11,7 +11,7 @@
 2、============位于src/backend/optimizer/util/pathnode.c文件中的函数“set_joinpath_distribution”
 作用：该函数用于分析join涉及的参数，并给“join_path”的属性“Distribution”设置对应的值，且每一种可能的“Distribution”都需要被返回（构建list返回），以供调用者选择代价最小的。
 	在该函数中，通过对“innerjoinpath->distribution”、“outerjoinpath->distribution”、“jointype”、“innerjoinpath->distribution->distributionType”、“outerjoinpath->distribution->distributionType”的判断进行不同的处理
-	其中以下四种情况可以不用通过重分布数据搞定：
+	其中以下四种情况可以不用通过分布式数据搞定：
 		（1）针对innerjoinpath、outerjoinpath都是replicated类型的Distribution
 		（2）针对innerjoinpath是replicated类型的Distribution；outerjoinpath不是replicated类型的Distribution
 		（3）针对outerjoinpath是replicated类型的Distribution；innerjoinpath不是replicated类型的Distribution
