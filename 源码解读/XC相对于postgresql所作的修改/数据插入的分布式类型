@@ -1,0 +1,9 @@
+1、在XC中数据的分布式类型有如下几类：（即对应建表时的“DISTRIBUTE BY”语句）
+	（1）“distributeby”为“DISTTYPE_HASH”；对应的“locator”类型为“LOCATOR_TYPE_HASH”
+	（2）“distributeby”为“DISTTYPE_MODULO”；对应的“locator”类型为“LOCATOR_TYPE_MODULO”
+	（3）“distributeby”为“DISTTYPE_REPLICATION”；对应的“locator”类型为“LOCATOR_TYPE_REPLICATED”
+	（4）“distributeby”为“DISTTYPE_ROUNDROBIN”；对应的“locator”类型为“LOCATOR_TYPE_RROBIN”
+
+
+
+
