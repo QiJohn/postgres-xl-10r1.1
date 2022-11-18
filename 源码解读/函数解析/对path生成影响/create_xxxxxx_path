@@ -1,0 +1,103 @@
+在文件”src/backend/optimizer/util/pathnode.c“中
+1、新增函数”set_scanpath_distribution”，用于“给base relation scan的path设置分布式(distribution)”
+
+
+
+2、新增函数“create_remotesubplan_path”，用于“依据distribution对数据进行分布”
+
+
+
+3、对于函数”create_seqscan_path“，增加如下代码，用于“给scan path设置分布式”
+	set_scanpath_distribution(root, rel, pathnode);
+	if (rel->baserestrictinfo){
+		ListCell *lc;
+		foreach (lc, rel->baserestrictinfo)
+		{
+			RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
+			restrict_distribution(root, ri, pathnode);
+		}
+	}
+
+
+4、对于函数”create_samplescan_path“，增加如下代码，用于“给scan path设置分布式”
+	set_scanpath_distribution(root, rel, pathnode);
+	if (rel->baserestrictinfo){
+		ListCell *lc;
+		foreach (lc, rel->baserestrictinfo)
+		{
+			RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
+			restrict_distribution(root, ri, pathnode);
+		}
+	}
+
+
+
+
+5、对于函数”create_index_path“，增加如下代码，用于“给scan path设置分布式”
+	set_scanpath_distribution(root, rel, pathnode);
+	if (rel->baserestrictinfo){
+		ListCell *lc;
+		foreach (lc, rel->baserestrictinfo)
+		{
+			RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
+			restrict_distribution(root, ri, pathnode);
+		}
+	}
+
+
+
+
+6、对于函数”create_bitmap_heap_path“，增加如下代码，用于“给scan path设置分布式”
+	set_scanpath_distribution(root, rel, pathnode);
+	if (rel->baserestrictinfo){
+		ListCell *lc;
+		foreach (lc, rel->baserestrictinfo)
+		{
+			RestrictInfo *ri = (RestrictInfo *) lfirst(lc);
+			restrict_distribution(root, ri, pathnode);
+		}
+	}
+
+
+
+
+7、对于函数”create_bitmap_and_path“，增加如下代码，用于“给scan path设置分布式”
+	set_scanpath_distribution(root, rel, pathnode);
+
+
+
+8、对于函数”create_bitmap_or_path“，增加如下代码，用于“给scan path设置分布式”
+	set_scanpath_distribution(root, rel, pathnode);
+
+
+9、对于函数”create_append_path“，增加“distribution”处理相关的代码
+
+
+10、对于函数”create_merge_append_path“，增加“distribution”处理相关的代码
+
+
+11、对于函数”create_material_path“，增加如下代码，用于“给path设置分布式”
+	pathnode->path.distribution = (Distribution *) copyObject(subpath->distribution);
+
+
+12、对于函数”create_unique_path“，增加如下代码，用于“给path设置分布式”
+	pathnode->path.distribution = (Distribution *) copyObject(subpath->distribution);
+
+
+13、重新函数“create_subqueryscan_path”
+
+
+14、对于函数”create_nestloop_path“，增加“distribution”处理相关的代码
+
+
+15、对于函数”create_mergejoin_path“，增加“distribution”处理相关的代码
+
+
+16、对于函数”create_hashjoin_path“，增加“distribution”处理相关的代码
+
+
+
+
+
+
+
