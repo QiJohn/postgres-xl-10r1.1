@@ -1,0 +1,68 @@
+在文件”src/backend/optimizer/plan/createplan.c“中
+1、对于函数”create_plan“，增加如下代码
+	root->curOuterRestrict = NULL;
+	adjust_subplan_distribution(root, root->distribution, best_path->distribution);
+
+
+
+2、对于函数”create_plan_recurse“，增加如下代码
+	case T_RemoteSubplan:
+			plan = (Plan *) create_remotescan_plan(root, (RemoteSubPath *) best_path);
+			break;
+
+
+
+3、对于函数”create_unique_plan”，增加如下代码，用于“在RemoteSubplan具有条件投影能力时，将投影push到datanode”
+	if (IsA(subplan, RemoteSubplan))
+			subplan->lefttree->targetlist = newtlist;
+
+
+
+4、新增函数“create_remotescan_plan”，用于为“best_path”和“subpaths”(即递归创建plan)创建“RemoteSubquery plan”
+
+
+
+5、对于函数”create_nestloop_plan“，增加如下代码，用于”对RemoteSubplan类型的‘inner plan’进行materialize“
+	if (IsA(inner_plan, RemoteSubplan)){
+			Plan	   *matplan = (Plan *) make_material(inner_plan);
+			copy_plan_costsize(matplan, inner_plan);
+			matplan->total_cost += cpu_operator_cost * matplan->plan_rows;
+			inner_plan = matplan;
+	}
+
+
+6、新增函数”make_remotesubplan“，用于”创建RemoteSubplan节点，在远程节点上执行子计划“
+
+
+
+7、对于函数”prepare_sort_from_pathkeys”，新增如下代码，用于“在RemoteSubplan具有条件投影能力时，将投影push到datanode”
+	if (IsA(lefttree, RemoteSubplan))
+		lefttree->lefttree->targetlist = tlist;
+
+
+
+8、对于函数”make_unique_from_sortclauses“，新增如下代码，用于”过滤node上重复数据，以减少网络数据发送量和CN的负载“
+	pushdown = find_push_down_plan(lefttree, true);
+	if (pushdown){
+		Unique	   *node1 = makeNode(Unique);
+		Plan	   *plan1 = &node1->plan;
+		copy_plan_costsize(plan1, pushdown->scan.plan.lefttree);
+		plan1->targetlist = pushdown->scan.plan.lefttree->targetlist;
+		plan1->qual = NIL;
+		plan1->lefttree = pushdown->scan.plan.lefttree;
+		pushdown->scan.plan.lefttree = plan1;
+		plan1->righttree = NULL;
+		node1->numCols = numCols;
+		node1->uniqColIdx = uniqColIdx;
+		node1->uniqOperators = uniqOperators;
+	}
+
+
+9、新增函数”make_result“，用于”构建Result plan node“
+
+
+
+
+
+
+
