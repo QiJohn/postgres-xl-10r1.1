@@ -1,6 +1,6 @@
 在文件”src/backend/tcop/pquery.c“中
 1、对于函数”ChoosePortalStrategy“，新增针对XL的“EXECUTE DIRECT“到Strategy的转换代码
-	当stmt是query时：
+	当stmt是query时，通过exec_direct_type类型进行转换：
 	（1）EXEC_DIRECT_SELECT、EXEC_DIRECT_UPDATE、EXEC_DIRECT_DELETE、EXEC_DIRECT_INSERT、EXEC_DIRECT_LOCAL返回”PORTAL_ONE_SELECT“
 	（2）EXEC_DIRECT_UTILITY、EXEC_DIRECT_LOCAL_UTILITY返回”PORTAL_MULTI_QUERY“
 	当stmt是RemoteQuery时：
