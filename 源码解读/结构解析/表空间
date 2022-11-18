@@ -1,0 +1,7 @@
+1、====================在文件”src/backend/catalog/namespace.c”的函数“InitTempTableNamespace”中
+针对xl的分布式会话中的临时对象，定义了表空间
+	snprintf(namespaceName, sizeof(namespaceName), "pg_temp_%d", MyFirstBackendId);   //例如表空间“pg_temp_1”
+	snprintf(namespaceName, sizeof(namespaceName), "pg_toast_temp_%d", MyFirstBackendId);  //例如表空间“pg_toast_temp_1”
+
+此外还有函数ResetTempTableNamespace、ForgetTempTableNamespace
+
