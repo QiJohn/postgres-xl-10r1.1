@@ -1,0 +1,30 @@
+在文件”src/backend/tcop/pquery.c“中
+1、对于函数”ChoosePortalStrategy“，新增针对XL的“EXECUTE DIRECT“到Strategy的转换代码
+	当stmt是query时：
+	（1）EXEC_DIRECT_SELECT、EXEC_DIRECT_UPDATE、EXEC_DIRECT_DELETE、EXEC_DIRECT_INSERT、EXEC_DIRECT_LOCAL返回”PORTAL_ONE_SELECT“
+	（2）EXEC_DIRECT_UTILITY、EXEC_DIRECT_LOCAL_UTILITY返回”PORTAL_MULTI_QUERY“
+	当stmt是RemoteQuery时：
+	（1）EXEC_DIRECT_SELECT、EXEC_DIRECT_UPDATE、EXEC_DIRECT_DELETE、EXEC_DIRECT_INSERT、EXEC_DIRECT_LOCAL返回”PORTAL_ONE_SELECT“
+	（2）EXEC_DIRECT_UTILITY、EXEC_DIRECT_LOCAL_UTILITY返回”PORTAL_MULTI_QUERY“
+	当stmt是PlannedStmt,且”stmt->distributionRestrict“的list个数大于1，返回”PORTAL_DISTRIBUTED“
+
+
+
+2、对于函数”PortalStart“，新增对于”portal->strategy“为”PORTAL_DISTRIBUTED“时的处理
+
+
+3、对于函数”PortalRun“，新增对于”portal->strategy“为”PORTAL_DISTRIBUTED“时的处理
+
+
+4、对于函数”PortalRunUtility“，新增对于XL的特有"utilityStmt"语句的支持，例如：PauseClusterStmt、BarrierStmt、CheckPointStmt且是DN
+
+
+5、新增函数”AdvanceProducingPortal“，该函数用于”执行特定的portal's query，并且distribute tuple给consumers“
+
+
+
+
+
+
+
+
