@@ -1,0 +1,217 @@
+1、================对remotesubplan_path的影响
+在创建RemoteSubPath节点时，需要获取“Distribution”类型节点参数，依据该Distribution对data进行重新分布
+	Path *create_remotesubplan_path(PlannerInfo *root, Path *subpath,
+							Distribution *distribution)
+	{
+		RelOptInfo	   *rel = subpath->parent;
+		RemoteSubPath  *pathnode;
+		Distribution   *subdistribution = subpath->distribution;
+
+		pathnode = makeNode(RemoteSubPath);
+		pathnode->path.pathtype = T_RemoteSubplan;
+		pathnode->path.parent = rel;
+		pathnode->path.param_info = subpath->param_info;
+		pathnode->path.pathkeys = subpath->pathkeys;
+		pathnode->subpath = subpath;
+		pathnode->path.distribution = (Distribution *) copyObject(distribution);
+
+		/* We don't want to run subplains in parallel workers */
+		pathnode->path.parallel_aware = false;
+		pathnode->path.parallel_safe = false;
+
+		pathnode->path.pathtarget = subpath->pathtarget;
+
+		cost_remote_subplan((Path *) pathnode, subpath->startup_cost,
+							subpath->total_cost, subpath->rows, rel->reltarget->width,
+							(subdistribution && IsLocatorReplicated(subdistribution->distributionType)) ?
+							bms_num_members(subdistribution->nodes) : 1);
+
+		return (Path *) pathnode;
+	}
+
+调用”create_remotesubplan_path“的函数有：recurse_set_operations、adjust_path_distribution、create_distinct_paths、create_one_window_path、create_window_paths、consider_groupingsets_paths、create_grouping_paths、grouping_planner
+
+
+
+2、================对join_path、nestloop_path的影响
+在创建join_path的函数create_hashjoin_path、create_mergejoin_path、create_nestloop_path中，都会调用函数set_joinpath_distribution来设置postgres-xl的join节点的分布方式；
+在函数”set_joinpath_distribution“中，又会调用函数”redistribute_path“进行重新分布路径以匹配所需的分布参数。
+	/*
+	*分析Join参数，设置Join节点分布。
+	*如果存在可能的替代分发，则以列表形式返回各自的路径，以便调用者可以计算所有路径的成本，并选择最便宜继续。
+	*/
+	static List *set_joinpath_distribution(PlannerInfo *root, JoinPath *pathnode)
+	{
+		Distribution   *innerd = pathnode->innerjoinpath->distribution;
+		Distribution   *outerd = pathnode->outerjoinpath->distribution;
+		Distribution   *targetd;
+		List		   *alternate = NIL;
+		List		   *restrictClauses = NIL;
+
+		List		   *innerpathkeys = pathnode->innerjoinpath->pathkeys;
+		List		   *outerpathkeys = pathnode->outerjoinpath->pathkeys;
+
+		............
+
+	}
+
+
+调用”set_joinpath_distribution“的函数有：create_hashjoin_path、create_mergejoin_path、create_nestloop_path
+
+
+
+
+
+3、================对scan_path、index_path、bitmap_xxx_path的影响
+在创建scan_path的函数create_seqscan_path、create_tidscan_path、create_samplescan_path、create_index_path、create_bitmap_heap_path、create_bitmap_and_path、create_bitmap_or_path中，会调用函数”set_scanpath_distribution“将distribution分配给”基本关系扫描路径“
+	/*
+	*	Assign distribution to the path which is a base relation scan.
+	*/
+	static void set_scanpath_distribution(PlannerInfo *root, RelOptInfo *rel, Path *pathnode)
+	{
+		RangeTblEntry   *rte;
+		RelationLocInfo *rel_loc_info;
+
+		rte = planner_rt_fetch(rel->relid, root);
+		rel_loc_info = GetRelationLocInfo(rte->relid);
+
+		.......
+
+	}
+
+调用”set_scanpath_distribution“的函数有：create_seqscan_path、create_tidscan_path、create_samplescan_path、create_index_path、create_bitmap_heap_path、create_bitmap_and_path、create_bitmap_or_path
+
+
+
+
+4、================对子查询访问路径影响
+为子查询RTE生成“SubqueryScan”访问路径时，需要创建“Distribution”节点，并将该节点作为参数传递给函数create_subqueryscan_path
+	/*
+	* set_subquery_pathlist
+	*		Generate SubqueryScan access paths for a subquery RTE
+	*/
+	static void set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
+						Index rti, RangeTblEntry *rte)
+	{
+		Query	   *parse = root->parse;
+		Query	   *subquery = rte->subquery;
+		Relids		required_outer;
+		pushdown_safety_info safetyInfo;
+		double		tuple_fraction;
+		PlannerInfo *subroot;
+	#ifdef XCP
+		Distribution *distribution;
+	#endif
+		RelOptInfo *sub_final_rel;
+		ListCell   *lc;
+
+		.......
+	}
+
+调用”set_subquery_pathlist“的函数有：set_rel_size
+
+
+
+
+5、================对append_path的影响
+/*
+ Append path is used to implement scans of partitioned tables, inherited tables and some "set" operations, like UNION ALL. While all partitioned
+and inherited tables should have the same distribution, UNION'ed queries may have different.  When paths being appended have the same
+ distribution it is OK to push Append down to the data nodes. If not, perform "coordinator" Append.
+*
+Since we ensure that all partitions of a partitioned table are always distributed by the same strategy on the same set of nodes, we can push
+ down MergeAppend of partitions of the table.
+*/
+在函数append_path函数“create_append_path”中，如果存在分区关系且“subpaths”不为空，则直接将“Distribution”进行参数传递；如果不存在分区关系且“subpaths”不为空，则遍历subpaths，
+	AppendPath *create_append_path(RelOptInfo *rel, List *subpaths, Relids required_outer,
+					int parallel_workers, List *partitioned_rels)
+	{
+		AppendPath *pathnode = makeNode(AppendPath);
+		ListCell   *l;
+	#ifdef XCP
+		Distribution *distribution;
+		Path	   *subpath;
+	#endif
+		.......
+	#ifdef XCP
+		if (partitioned_rels && subpaths){
+			//直接将subpaths内的“Distribution”传递给AppendPath节点
+		}else if (subpaths){
+			l = list_head(subpaths);
+			while ((l = lnext(l))){
+				//遍历subpaths节点，如果所有的partitioned、inherited表的Distribution都一样，则可以直接将AppendPath节点下推到datanode
+			}
+			if (l){
+				List *newsubpaths = NIL;
+				//遍历原始的subpaths，使用函数“redistribute_path”构建newsubpaths中的元素
+			}
+			else
+				pathnode->path.distribution = distribution;
+		}
+	#endif
+		.......
+	}
+
+
+调用”create_append_path“的函数有：add_paths_to_append_rel、add_path、mark_dummy_rel、create_grouping_paths、generate_union_path、generate_nonunion_path、reparameterize_path
+
+
+
+
+6、================对merge_append_path的影响
+/*
+* Since we ensure that all partitions of a partitioned table are always distributed by the same strategy on the same set of nodes, we can push
+ down MergeAppend of partitions of the table.
+
+* For MergeAppend of non-partitions, it is safe to push down MergeAppend if all subpath distributions are the same and these distributions are
+ Replicated or distribution key is the expression of the first pathkey.
+*/
+	MergeAppendPath *create_merge_append_path(PlannerInfo *root, RelOptInfo *rel, List *subpaths,
+							List *pathkeys, Relids required_outer, List *partitioned_rels)
+	{
+		MergeAppendPath *pathnode = makeNode(MergeAppendPath);
+		Cost		input_startup_cost;
+		Cost		input_total_cost;
+		ListCell   *l;
+	#ifdef XCP
+		Distribution *distribution = NULL;
+		Path	   *subpath;
+	#endif
+
+		pathnode->path.pathtype = T_MergeAppend;
+		pathnode->path.parent = rel;
+	#ifdef XCP
+		l = list_head(subpaths);
+		subpath = (Path *) lfirst(l);
+		distribution = copyObject(subpath->distribution);
+
+		if (partitioned_rels)
+		{
+			pathnode->path.distribution = distribution;
+		}else{
+			if (distribution == NULL || IsLocatorReplicated(distribution->distributionType)){
+				//如果采用的是相同的Distribution，则直接下图MergeAppend，否则则构造coordinator Append
+			}
+			if (l){
+				List *newsubpaths = NIL;
+				//遍历原始的subpaths，使用函数“redistribute_path”构建newsubpaths中的元素
+			}
+			else
+				pathnode->path.distribution = distribution;
+		}
+
+	}
+
+
+调用”create_merge_append_path“的函数有：add_path、generate_mergeappend_paths
+
+
+
+7、================对material_path、unique_path影响
+在函数”create_material_path“、”create_unique_path“中，直接使用代码”pathnode->path.distribution = (Distribution *) copyObject(subpath->distribution);“进行Distribution的拷贝。
+
+
+调用”create_material_path“的函数有：set_tablesample_rel_pathlist、match_unsorted_outer
+调用”create_unique_path“的函数有：sort_inner_and_outer、match_unsorted_outer、consider_parallel_nestloop、hash_inner_and_outer、join_is_legal、populate_joinrel_with_paths
+
+
