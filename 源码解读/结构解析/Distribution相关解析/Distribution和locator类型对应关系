@@ -1,0 +1,5 @@
+locator默认类型是“LOCATOR_TYPE_NONE”，其它类型的对应如下所示
+	“distribution”类型为“DISTTYPE_HASH”；对应的“locator”类型为“LOCATOR_TYPE_HASH”
+	“distribution”类型为“DISTTYPE_MODULO”；对应的“locator”类型为“LOCATOR_TYPE_MODULO”
+	“distribution”类型为“DISTTYPE_REPLICATION”；对应的“locator”类型为“LOCATOR_TYPE_REPLICATED”
+	“distribution”类型为“DISTTYPE_ROUNDROBIN”；对应的“locator”类型为“LOCATOR_TYPE_RROBIN”
