@@ -15,7 +15,7 @@ redistribution as a part of ALTER TABLE command.
 	{
 		int			(*locatefunc) (Locator *self, Datum value, bool isnull,	bool *hasprimary);  //Function returns number of node references written to the array.
 		Oid			dataType; 		/* values of that type are passed to locateNodes function */
-		LocatorListType listType;
+		LocatorListType listType;	//可选取值为LOCATOR_LIST_NONE、LOCATOR_LIST_INT、LOCATOR_LIST_OID、LOCATOR_LIST_POINTER、LOCATOR_LIST_LIST
 		bool		primary;
 		int			roundRobinNode; /* for LOCATOR_TYPE_RROBIN */
 		LocatorHashFunc	hashfunc; /* for LOCATOR_TYPE_HASH */
