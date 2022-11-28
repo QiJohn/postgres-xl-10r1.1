@@ -59,10 +59,10 @@
 	} DistributeBy;
 
 	成员变量“disttype”的取值以及值对应的含义如下所示：
-			DISTTYPE_REPLICATION,			/* Replicated */
-			DISTTYPE_HASH,				/* Hash partitioned */
-			DISTTYPE_ROUNDROBIN,			/* Round Robin */
-			DISTTYPE_MODULO				/* Modulo partitioned */
+			DISTTYPE_REPLICATION,			/* Replicated */      //表示表在不同的数据节点上有相同的数据，相当于数据复制；
+			DISTTYPE_HASH,				/* Hash partitioned */     //表示按hash算法计算的结果把数据分布到后端的节点中
+			DISTTYPE_ROUNDROBIN,			/* Round Robin */  //表示根据插入的顺序把数据依次插入到不同的后端数据库节点
+			DISTTYPE_MODULO				/* Modulo partitioned */   //按照取模的结果值来分布数据
 
 
 
