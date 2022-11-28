@@ -1,0 +1,11 @@
+1、显式提交时两阶段使用的GID的起始标记，通过“   #define implicit2PC_head "_$XC$"   ”定义
+
+
+
+
+
+
+
+
+
+
