@@ -1,0 +1,10 @@
+{
+	"editor.wordWrap": "on",
+	"files.exclude": {
+		"**/.txt": true
+	},
+	"files.associations": {
+		"*.go": "bat",
+		"函数pgxc_planner": "plaintext"
+	}
+}
