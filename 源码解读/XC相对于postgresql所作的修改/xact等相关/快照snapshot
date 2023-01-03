@@ -1,0 +1,51 @@
+参考链接：https://developer.aliyun.com/article/61292、https://blog.csdn.net/qq_52668274/article/details/125031504、https://blog.csdn.net/jackgo73/article/details/122543660、http://feelkill.github.io/2017/08/02/pg-snapshot.html、https://blog.csdn.net/Hehuyi_In/article/details/124975687、https://blog.csdn.net/jackgo73/article/details/126008914、https://www.2ndquadrant.com/en/blog/back-to-postgresql-and-postgres-xl/
+
+
+（一）简介
+	快照是记录数据库当前瞬时状态的一个数据结构，通过获取快照，可以在执行query等场景时了解数据库的相关信息。pg的快照主要保存：当前所有活跃事务的最小、最大事务ID、当前活跃事务列表、commandID等。
+	快照可以分为多种类型，每种快照类型都对应了一种判断元组可见性的方法。快照本身的数据和快照对应的规则共同决定元组是否可见。
+	read committed隔离级别的事务，在事务中每次执行一条query，都需要获取快照，query执行结束就会释放快照。
+	repeatable read与serializable隔离级别的事务，则是在事务第一次执行query时获取快照，快照持续到事务结束释放。
+	快照是一组静态数据，不同时刻获取的快照数据不一样。
+
+
+（二）快照类型
+	快照的类型，决定了快照对应的规则，这些规则用于判断元组的可见性。其对应的规则有NOW快照规则、UPDATE快照规则、SELF快照规则、ANY快照规则、TOAST快照规则、DIRTY快照规则、MVCC快照规则、VACUUM快照规则。
+
+
+
+（三）关键变量
+	snapshot中的关键变量有xmin、xmax、xip[]数组，这些值都与事务相关。小于xmin的事务都已经执行完；大于或等于xmax的事务号还没分配给对应的事务；介于xmin和xmax之间的事务有些正在执行、有些已经执行完毕，其中存储在xip[]数组中的事务是正在执行的。
+
+
+
+（四）snapshot too old
+	在PG中使用vacuum对dead tuple进行回收处理，当快照可见的tuple作为dead tuple被vacuum回收后，就会出现“snapshot too old”的错误。
+	在9.6后的版本中引入参数“old_snapshot_threshold”，这个参数设置在使用快照时，一个快照可以被使用而没有发生“snapshot too old” 错误的风险的最小时间。超过此阈值时间的dead tuple将允许被清除。
+	使用函数“TestForOldSnapshot”判断“snapshot too old”
+
+
+（五）XL中各类snapshot对应的具体结构体及解析
+	1、GTM_SnapshotData
+		CN、DN分别与GTM进行交互，从GTM处获取SnapshotData数据，并使用这些数据设置GlobalSnapshotData。涉及的函数GetSnapshotData-->GetPGXCSnapshotData-->GetSnapshotDataFromGTM-->GetSnapshotGTM-->get_snapshot；get_snapshot通过socket获取数据
+	2、SnapshotData
+		2.1、在获取SnapshotData时，针对DN且GlobalSnapshot数据的来源是GTM，当”globalsnapshot“数据有效，则直接依据”globalsnapshot“设置”snapshot“；否则先从GTM中获取snapshot数据，再依据”globalsnapshot“设置”snapshot“
+	3、GlobalSnapshotData
+		定义的对应的全局变量为“globalSnapshot”。通过该全局快照来确保，不同DN上tuple的修改操作同时可见。
+		GlobalSnapshot的数据来源分两类GLOBAL_SNAPSHOT_SOURCE_GTM、GLOBAL_SNAPSHOT_SOURCE_COORDINATOR，通过变量GlobalSnapshotSource进行判断。
+	4、SerializedSnapshotData
+
+
+
+（六）快照对于数据库性能的影响
+	参考链接：https://cloud.tencent.com/developer/article/2065490?from=15425
+	每个连接数据库的client端都会需要快照(使用函数GetSnapshotData)，快照的构造、快照数据的更新、是否有效等等都会影响与client端的数据交互。尤其在高并发情况下，快照会对于数据库的性能影响更大。
+
+
+（七）快照何时需要更新
+	快照唯一需要更新的时机是：之前运行的一个事务提交了。（快照最根本的功能是提供运行事务id列表，列表中最大的那个就是xmax了，事务提交后就相当于不在运行事务列表中了，在做可见性判断时如果不在运行事务列表中，就知道事务已经提交或回滚了，这就需要继续走标志位 或 clog判断了；但是如果事务ID在运行事务列表中，那就一定没提交，不需要做任何进一步判断）
+
+
+
+
+
