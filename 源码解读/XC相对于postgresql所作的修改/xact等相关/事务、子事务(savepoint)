@@ -33,7 +33,7 @@
 
 	子事务在某些情况下会消耗事务号 XID：
 		PG 对于只包含 select 语句的事务并不会分配 xid，但是在子事务场景下，则可能为一个只包含 select 语句的子事务分配 xid。举个例子，如下“begin; select * from t; savepoint s1; select * from t; savepoint s2; select * from t; savepoint s3; insert into t values(1); commit;"当执行到 insert 语句时，将会给 s1,s2,s3 三个子事务分配 xid。在 PG 数据库中，事务号 xid 是一种宝贵的资源，但如果使用了子事务，将可能导致事务号 xid 消耗加快。
-
+	postgres-xl暂不支持savepoint。
 
 
 
