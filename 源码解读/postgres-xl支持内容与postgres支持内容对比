@@ -1,0 +1,6 @@
+1、子事务savepoint
+	postgres-xl暂不支持；postgresql支持
+
+2、Rule may not use NOTIFY
+	postgres-xl暂不支持；postgresql支持
+
