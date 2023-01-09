@@ -1,0 +1,74 @@
+===============以SQL语句”select  *  from  xxxxx;“为例==============
+当前DN、CN配置：有两个CN，分别为CN1、CN2；有两个DN，分别为DN1、DN2。
+使用psql连接CN1：输入该sql语句，需要将该sql语句分发给DN1、DN2，无需分发给CN2。
+
+在执行过程中，调用函数”ExecRemoteQuery“对query进行分发，该函数调用”get_exec_connections“确定哪些DN会收到该query，该函数返回与这些DN进行连接的对应的connection句柄
+
+
+/*
+ * Get Node connections depending on the connection type:
+ * Datanodes Only, Coordinators only or both types
+ */
+static PGXCNodeAllHandles *
+get_exec_connections(RemoteQueryState *planstate,
+					 ExecNodes *exec_nodes,
+					 RemoteQueryExecType exec_type,
+					 bool is_global_session)
+{
+	List 	   *nodelist = NIL;
+	List 	   *primarynode = NIL;
+	List	   *coordlist = NIL;
+	PGXCNodeHandle *primaryconnection;
+	int			co_conn_count, dn_conn_count;
+	bool		is_query_coord_only = false;
+	PGXCNodeAllHandles *pgxc_handles = NULL;
+
+	/*
+	 * If query is launched only on Coordinators, we have to inform get_handles
+	 * not to ask for Datanode connections even if list of Datanodes is NIL.
+	 */
+	if (exec_type == EXEC_ON_COORDS)
+		is_query_coord_only = true;
+
+	if (exec_type == EXEC_ON_CURRENT)  //直接返回当前connection句柄
+		return get_current_handles();
+
+	if (exec_nodes)
+	{
+		if (exec_nodes->en_expr) //执行(execute)时期确定涉及的node，例如：insert数据
+		{
+			。。。。
+			ExecNodes *nodes = GetRelationNodes(rel_loc_info, partvalue, isnull,exec_nodes->accesstype); //计算涉及的node，如，query需要分发给哪些DN
+			。。。。
+		}else if (OidIsValid(exec_nodes->en_relid))	{
+			RelationLocInfo *rel_loc_info = GetRelationLocInfo(exec_nodes->en_relid);
+			ExecNodes *nodes = GetRelationNodes(rel_loc_info, 0, true, exec_nodes->accesstype);  //计算涉及的node，如，query需要分发给哪些DN
+			。。。。
+		}else{  //例如：select数据
+			/*连接涉及所有DN、CN、nodelist*/
+		}
+	}
+	。。。。
+	/*计算涉及的DN数目：dn_conn_count
+	   计算涉及的CN数目：co_conn_count
+	   设置node list*/
+
+	/* Get other connections (non-primary) */
+	pgxc_handles = get_handles(nodelist, coordlist, is_query_coord_only, is_global_session); //获取DN、CN节点connection的句柄
+
+	/*获取primary node使用的connection*/
+	。。。。
+
+	/* Depending on the execution type, we still need to save the initial node counts */
+	pgxc_handles->dn_conn_count = dn_conn_count;
+	pgxc_handles->co_conn_count = co_conn_count;
+
+	return pgxc_handles;
+}
+
+
+
+
+
+
+
