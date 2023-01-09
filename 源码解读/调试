@@ -1,10 +1,17 @@
 1、 == == == == == == == == 在代码中添加打印栈的相关信息，如下所示：
-首先添加头文件：#include<execinfo.h>
-再添加如下代码
-	void *backtrace_buff[100];
-	int bj, nptrs;
-	char **strings;
-	nptrs = backtrace(backtrace_buff, 100);
-	strings = backtrace_symbols(backtrace_buff, nptrs);
-	for (bj = 0; bj < nptrs; bj++)
-		elog(DEBUG1, "调用函数producerReceiveSlot，在执行SharedQueueWrite前进行调试信息打印:%s", strings[bj]);
+	首先添加头文件：#include<execinfo.h>
+	再添加如下代码
+		void *backtrace_buff[100];
+		int bj, nptrs;
+		char **strings;
+		nptrs = backtrace(backtrace_buff, 100);
+		strings = backtrace_symbols(backtrace_buff, nptrs);
+		for (bj = 0; bj < nptrs; bj++)
+			elog(DEBUG1, "调用函数producerReceiveSlot，在执行SharedQueueWrite前进行调试信息打印:%s", strings[bj]);
+
+2、 == == == == == = gdb调试时如何格式化打印内容
+	GDB提供了格式化输出显示结构体的选项”print pretty“， 这个选项的默认是关闭的，通过命令”set print pretty on“打开该选项即可通过print格式化输出内容
+
+
+
+
