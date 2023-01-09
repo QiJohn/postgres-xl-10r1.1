@@ -1,0 +1,71 @@
+获取查询语句的执行计划如下所示：
+	postgres=# explain select * from t_student where student_id=12;
+										QUERY PLAN
+	----------------------------------------------------------------------------------------
+	Remote Fast Query Execution  (cost=0.00..0.00 rows=0 width=0)
+	Node/s: datanode_1
+	->  Index Scan using t_student_pkey on t_student  (cost=0.14..8.16 rows=1 width=541)
+			Index Cond: (student_id = 12)
+	(4 rows)
+
+在该执行计划中使用索引扫描(index scan)对表t_student进行扫描，从而获取数据，其函数调用如下所示：
+	#0  btbeginscan (rel=0x7ff8ef2324d8, nkeys=1, norderbys=0) at nbtree.c:479
+	#1  0x00000000004faa11 in index_beginscan_internal (indexRelation=0x7ff8ef2324d8, nkeys=1, norderbys=0, snapshot=0x2e69d10, pscan=0x0, temp_snap=0 '\000') at indexam.c:288
+	#2  0x00000000004fa86b in index_beginscan (heapRelation=0x7ff8ef2282a0, indexRelation=0x7ff8ef2324d8, snapshot=0x2e69d10, nkeys=1, norderbys=0) at indexam.c:228
+	#3  0x00000000006f4908 in IndexNext (node=0x2ecaa88) at nodeIndexscan.c:113
+	#4  0x00000000006db9da in ExecScanFetch (node=0x2ecaa88, accessMtd=0x6f4845 <IndexNext>, recheckMtd=0x6f4fa0 <IndexRecheck>) at execScan.c:97
+	#5  0x00000000006dba49 in ExecScan (node=0x2ecaa88, accessMtd=0x6f4845 <IndexNext>, recheckMtd=0x6f4fa0 <IndexRecheck>) at execScan.c:147
+	#6  0x00000000006f54a0 in ExecIndexScan (pstate=0x2ecaa88) at nodeIndexscan.c:563
+	#7  0x00000000006da0a7 in ExecProcNodeFirst (node=0x2ecaa88) at execProcnode.c:529
+	#8  0x00000000006d2448 in ExecProcNode (node=0x2ecaa88) at ../../../src/include/executor/executor.h:263
+	#9  0x00000000006d4e88 in ExecutePlan (estate=0x2eca870, planstate=0x2ecaa88, use_parallel_mode=0 '\000', operation=CMD_SELECT, sendTuples=1 '\001', numberTuples=0,
+		direction=ForwardScanDirection, dest=0x2ed8ad8, execute_once=1 '\001') at execMain.c:1793
+	#10 0x00000000006d2bb0 in standard_ExecutorRun (queryDesc=0x2de5640, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:413
+	#11 0x00000000006d29a9 in ExecutorRun (queryDesc=0x2de5640, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:355
+	#12 0x00000000008e49f9 in PortalRunSelect (portal=0x2dd8330, forward=1 '\001', count=0, dest=0x2ed8ad8) at pquery.c:1462
+	#13 0x00000000008e40f5 in PortalRun (portal=0x2dd8330, count=9223372036854775807, isTopLevel=1 '\001', run_once=1 '\001', dest=0x2ed8ad8, altdest=0x2ed8ad8,
+		completionTag=0x7ffe0f5803a0 "") at pquery.c:1133
+	#14 0x00000000008dc8d9 in exec_simple_query (query_string=0x2e37c20 "SELECT student_id, name, gender, age, class_id, comment FROM t_student WHERE (student_id = 12)") at postgres.c:1363
+	#15 0x00000000008e1274 in PostgresMain (argc=1, argv=0x2de89c0, dbname=0x2de8798 "postgres", username=0x2dbada8 "zq") at postgres.c:4731
+	#16 0x000000000084101d in BackendRun (port=0x2de0ed0) at postmaster.c:4628
+	#17 0x00000000008407a5 in BackendStartup (port=0x2de0ed0) at postmaster.c:4300
+	#18 0x000000000083c99c in ServerLoop () at postmaster.c:1857
+	#19 0x000000000083bfdb in PostmasterMain (argc=8, argv=0x2db8b30) at postmaster.c:1465
+	#20 0x000000000075c60e in main (argc=8, argv=0x2db8b30) at main.c:228
+
+在查询中进行索引扫描的上层函数为”index_beginscan“，通过在”index_beginscan_internal“中函数指针”indexRelation->rd_amroutine->ambeginscan“执行具体的函数，例如绑定的B-Tree索引扫描函数”btbeginscan“
+	static IndexScanDesc index_beginscan_internal(Relation indexRelation,
+						 int nkeys, int norderbys, Snapshot snapshot,
+						 ParallelIndexScanDesc pscan, bool temp_snap)
+	{
+		。。。。
+		//指针ambeginscan绑定的函数例如可以为”btbeginscan“
+		scan = indexRelation->rd_amroutine->ambeginscan(indexRelation, nkeys, norderbys);
+		。。。
+
+		return scan;
+	}
+在索引扫描中其它上层函数，调用的接口函数，及其绑定的B-Tree相关的函数如下所示：
+	{type = T_IndexAmRoutine, amstrategies = 5, amsupport = 2, amcanorder = 1 '\001', amcanorderbyop = 0 '\000', amcanbackward = 1 '\001', amcanunique = 1 '\001',
+  amcanmulticol = 1 '\001', amoptionalkey = 1 '\001', amsearcharray = 1 '\001', amsearchnulls = 1 '\001', amstorage = 0 '\000', amclusterable = 1 '\001',
+  ampredlocks = 1 '\001', amcanparallel = 1 '\001', amkeytype = 0, ambuild = 0x506e98 <btbuild>, ambuildempty = 0x5070de <btbuildempty>, aminsert = 0x507184 <btinsert>,
+  ambulkdelete = 0x50877e <btbulkdelete>, amvacuumcleanup = 0x5088d1 <btvacuumcleanup>, amcanreturn = 0x5091e6 <btcanreturn>, amcostestimate = 0x9e7f18 <btcostestimate>,
+  amoptions = 0x5109e0 <btoptions>, amproperty = 0x510a0a <btproperty>, amvalidate = 0x51248b <btvalidate>, ambeginscan = 0x50756a <btbeginscan>,
+  amrescan = 0x507705 <btrescan>, amgettuple = 0x507203 <btgettuple>, amgetbitmap = 0x507414 <btgetbitmap>, amendscan = 0x507aab <btendscan>,
+  ammarkpos = 0x507d9b <btmarkpos>, amrestrpos = 0x507f93 <btrestrpos>, amestimateparallelscan = 0x508359 <btestimateparallelscan>,
+  aminitparallelscan = 0x508364 <btinitparallelscan>, amparallelrescan = 0x5083b2 <btparallelrescan>}
+
+总结
+	函数分为三类，上层函数、接口函数、实际执行绑定的函数。如针对B-Tree实现的索引，实现执行时接口函数”ambeginscan“绑定的函数为”btbeginscan“；
+	|				上层函数			|				接口函数			|		实际执行绑定的函数可为		|
+	|		index_beginscan			|				ambeginscan		|				btbeginscan					|
+	|		index_endscan			|				amendscan		|				btendscan						|
+	|		index_rescan				|				amrescan		|				btrescan						|
+	|		index_getbitmap			|				amgetbitmap		|				btgetbitmap					|
+	|		index_build					|				ambuild				|				btbuild							|
+
+
+
+
+
+
