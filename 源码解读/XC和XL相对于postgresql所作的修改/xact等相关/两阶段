@@ -1,0 +1,14 @@
+参考链接：https://fastonetech.com/newszblog/post/4823.html(一文看懂分布式数据库原理和 PostgreSQL 分布式架构)
+
+
+1、显式提交时两阶段使用的GID的起始标记，通过“   #define implicit2PC_head "_$XC$"   ”定义
+
+
+
+
+
+
+
+
+
+
