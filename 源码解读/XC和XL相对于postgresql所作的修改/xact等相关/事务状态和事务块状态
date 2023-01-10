@@ -1,0 +1,155 @@
+事务块：begin标志事务块开始；commit(end)、rollback(abort) 等标志事务块结束
+
+事务块的各种状态定义在xact.c文件typedef enum TBlockState 部分，注意事务块的状态和事务的状态是不一样的
+
+
+================================================事务块状态变化（包含子事务）================================================
+事务块一般有以下几种状态：typedef enum TBlockState
+{
+	/* not-in-transaction-block states */
+	TBLOCK_DEFAULT,				/* idle  空闲*/
+	TBLOCK_STARTED,				/* running single-query transaction  单个查询事务*/
+
+	/* transaction block states */
+	TBLOCK_BEGIN,				/* starting transaction block  开始事务块*/
+	TBLOCK_INPROGRESS,			/* live transaction  进行中*/
+	TBLOCK_PARALLEL_INPROGRESS, /* live transaction inside parallel worker  并行worker中的事务,进行中*/
+	TBLOCK_END,					/* COMMIT received  接收到COMMIT*/
+	TBLOCK_ABORT,				/* failed xact, awaiting ROLLBACK  失败,等待ROLLBACK*/
+	TBLOCK_ABORT_END,			/* failed xact, ROLLBACK received  失败,已接收ROLLBACK*/
+	TBLOCK_ABORT_PENDING,		/* live xact, ROLLBACK received  进行中,接收到ROLLBACK*/
+	TBLOCK_PREPARE,				/* live xact, PREPARE received  进行中,接收到PREPARE*/
+
+	/* subtransaction states */
+	TBLOCK_SUBBEGIN,			/* starting a subtransaction  开启*/
+	TBLOCK_SUBINPROGRESS,		/* live subtransaction  进行中*/
+	TBLOCK_SUBRELEASE,			/* RELEASE received  接收到RELEASE*/
+	TBLOCK_SUBCOMMIT,			/* COMMIT received while TBLOCK_SUBINPROGRESS  进行中,接收到COMMIT*/
+	TBLOCK_SUBABORT,			/* failed subxact, awaiting ROLLBACK   失败,等待ROLLBACK*/
+	TBLOCK_SUBABORT_END,		/* failed subxact, ROLLBACK received  失败,已接收ROLLBACK*/
+	TBLOCK_SUBABORT_PENDING,	/* live subxact, ROLLBACK received  进行中,接收到ROLLBACK*/
+	TBLOCK_SUBRESTART,			/* live subxact, ROLLBACK TO received  进行中,接收到ROLLBACK TO*/
+	TBLOCK_SUBABORT_RESTART		/* failed subxact, ROLLBACK TO received  失败,已接收ROLLBACK TO*/
+} TBlockState;
+
+参考(事务快状态转换图)https://www.cnblogs.com/biterror/p/7161631.html
+1、begin命令下事务块状态转换和函数
+"TBLOCK_DEFAULT"-----StartTransactionCommand()---->"TBLOCK_STARTED"-----BeginTransactionBlock()---->"TBLOCK_BEGIN"-----CommitTransactionCommand()---->"TBLOCK_INPROGRESS"
+
+"TBLOCK_SUBBEGIN"-----CommitTransactionCommand()---->"TBLOCK_SUBINPROGRESS"
+
+
+2、commit、end命令下事务块状态转换和函数
+"TBLOCK_INPROGRESS"-----EndTransactionBlock()---->"TBLOCK_END"-----CommitTransactionCommand()---->"TBLOCK_DEFAULT"
+
+3、rollback、abort命令下事务块状态转换和函数
+"TBLOCK_INPROGRESS"-----UserAbortTransactionBlock()---->"TBLOCK_ABORT_PENDING"-----CommitTransactionCommand()---->"TBLOCK_DEFAULT"
+
+"TBLOCK_INPROGRESS"-----AbortCurrentTransaction()---->"TBLOCK_ABORT"-----UserAbortTransactionBlock()---->"TBLOCK_ABORT_END"-----CommitTransactionCommand()---->"TBLOCK_DEFAULT"
+
+"TBLOCK_DEFAULT"-----StartTransactionCommand()---->"TBLOCK_STARTED"-----UserAbortTransactionBlock()---->"TBLOCK_ABORT_PENDING"
+
+
+
+
+=================================================事务状态变化========================================================
+事务一般只有以下几种简单状态：typedef enum TransState
+{
+	TRANS_DEFAULT,				/* idle  空闲*/
+	TRANS_START,				/* transaction starting  事务启动*/
+	TRANS_INPROGRESS,			/* inside a valid transaction  进行中*/
+	TRANS_COMMIT,				/* commit in progress  提交中*/
+	TRANS_ABORT,				/* abort in progress  回滚中*/
+	TRANS_PREPARE				/* prepare in progress  准备中*/
+} TransState;
+
+
+1、begin命令下事务块状态转换和函数
+"TRANS_DEFAULT"-----StartTransaction()---->"TRANS_START"---->"TRANS_INPROGRESS"
+"TRANS_DEFAULT"-----StartSubTransaction()---->"TRANS_START"---->"TRANS_INPROGRESS"
+
+2、commit、end命令下事务块状态转换和函数
+"TRANS_INPROGRESS"-----CommitTransaction()---->"TRANS_COMMIT"---->"TRANS_DEFAULT"
+"TRANS_INPROGRESS"-----CommitSubTransaction()---->"TRANS_COMMIT"---->"TRANS_DEFAULT"
+
+3、prepare命令下事务块状态转换和函数
+"TRANS_INPROGRESS"-----PrepareTransaction()---->"TRANS_PREPARE"---->"TRANS_DEFAULT"
+
+4、rollback、abort命令下事务块状态转换和函数
+"TRANS_INPROGRESS"或"TRANS_PREPARE"-----AbortTransaction()---->"TRANS_ABORT"
+"TRANS_INPROGRESS"-----AbortSubTransaction()---->"TRANS_ABORT"
+
+5、清理处理
+"TRANS_ABORT"-----CleanupTransaction()---->"TRANS_DEFAULT"
+"TRANS_ABORT"-----CleanupSubTransaction()---->"TRANS_DEFAULT"
+
+=================================================事务状态数据存储========================================================
+	typedef struct TransactionStateData{
+	#ifdef PGXC  /* PGXC_COORD */
+		/* my GXID, or Invalid if none */
+		GlobalTransactionId transactionId;
+		GlobalTransactionId	topGlobalTransansactionId;
+		GlobalTransactionId	auxilliaryTransactionId;
+	#else
+		TransactionId transactionId;	/* my XID, or Invalid if none */
+	#endif
+		SubTransactionId subTransactionId;	/* my subxact ID */
+		char	   *name;			/* savepoint name, if any */
+		int			savepointLevel; /* savepoint level */
+		TransState	state;			/* low-level state */
+		TBlockState blockState;		/* high-level state */
+		int			nestingLevel;	/* transaction nesting depth */
+		int			gucNestLevel;	/* GUC context nesting depth */
+		MemoryContext curTransactionContext;	/* my xact-lifetime context */
+		ResourceOwner curTransactionOwner;	/* my query resources */
+		TransactionId *childXids;	/* subcommitted child XIDs, in XID order */
+		int			nChildXids;		/* # of subcommitted child XIDs */
+		int			maxChildXids;	/* allocated size of childXids[] */
+		Oid			prevUser;		/* previous CurrentUserId setting */
+		int			prevSecContext; /* previous SecurityRestrictionContext */
+		bool		prevXactReadOnly;	/* entry-time xact r/o state */
+		bool		startedInRecovery;	/* did we start in recovery? */
+		bool		didLogXid;		/* has xid been included in WAL record? */
+		int			parallelModeLevel;	/* Enter/ExitParallelMode counter */
+		struct TransactionStateData *parent;	/* back link to parent */
+	#ifdef XCP
+		/*
+		* flags to track whether to run the remote transaction in a transaction
+		* block or in autocommit mode.
+		*/
+		int				remoteTransactionBlockFlags;
+		int				waitedForXidsCount;	/* count of xids we waited to finish */
+		TransactionId	*waitedForXids;		/* xids we waited to finish */
+	#endif
+	} TransactionStateData;
+在PG原始的数据结构基础上，XC添加了处理全局事务需要的ID，XL添加了处理远程事务需要的数据。
+
+
+
+=================================================XL简单查询事务处理实例========================================================
+=================DN节点上执行如下所示============
+BEGIN语句：
+	1、此时，事务块状态为TBLOCK_DEFAULT
+	2、调用StartTransactionCommand函数，由于当前事务块状态为TBLOCK_DEFAULT，于是调用StartTransaction函数，首先设置事务状态为TRANS_START，然后完成有关内存、缓冲区、锁、GTM时间戳的处理后，设置事务状态为TRANS_INPROGRESS。最后设置事务块的状态为TBLOCK_STARTED。
+	3、调用ProcessUtility函数处理BEGIN语句。
+	4、遇到“BEGIN”，所以调用BeginTransactionBlock函数，事务块状态被设置为TBLOCK_BEGIN
+	5、最后调用CommitTransactionCommand函数，由于当前事务块状态为TBLOCK_BEGIN，于是改变事务块状态为TBLOCK_INPROGRESS，并准备读取下一条命令。
+
+SELECT语句：
+	1、调用StartTransactionCommand函数，由于当前事务块状态为TBLOCK_INPROGRESS，表明继续该事务命令，不做任何处理，直接放回
+	2、调用ProcessQuery函数进入执行器处理SELECT语句
+	3、调用CommitTransactionCommand函数，由于当前事务块状态为TBLOCK_INPROGRESS，执行CommandCounterIncrement函数增加命令计数，并返回
+
+END语句(两阶段)：
+	PREPARE TRANSACTION阶段：
+		1、调用StartTransactionCommand函数，由于当前事务块状态为TBLOCK_INPROGRESS，表明继续该事务命令，不做任何处理，直接放回
+		2、调用PrepareTransactionBlock函数，在该函数中调用EndTransactionBlock函数，最后事务块状态变为TBLOCK_PREPARE
+		3、调用CommitTransactionCommand函数，在该函数中调用PrepareTransaction函数，最后事务块状态变为TBLOCK_DEFAULT
+
+	COMMIT PREPARED阶段：
+		1、调用StartTransactionCommand函数，由于当前事务块状态为TBLOCK_DEFAULT，于是调用StartTransaction函数，最后设置事务块的状态为TBLOCK_STARTED。
+		2、调用CommitTransactionCommand函数，并在该函数中调用CommitTransaction函数，真正进行事务提交
+
+
+
+
