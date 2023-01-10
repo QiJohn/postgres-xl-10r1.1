@@ -1,6 +1,6 @@
 1、在文件”src/backend/access/hash/hashfunc.c“新增函数”compute_hash“、”get_compute_hash_function“，用于实现”基于datatype获取hash函数，并通过hash函数计算数据的distribution“
 
-
+2、在文件”src/backend/pgxc/pool/execRemote.c“新增函数”ExecRemoteUtility“，该函数用于在所有datanode上执行”utility statement“，例如将DDL语句转发到所有的CN、DN上。
 
 
 
