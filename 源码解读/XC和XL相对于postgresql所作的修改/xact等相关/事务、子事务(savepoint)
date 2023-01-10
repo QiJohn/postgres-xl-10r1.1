@@ -1,0 +1,44 @@
+事务执行函数：standard_ProcessUtility
+	nodeTag为“T_TransactionStmt”即为事务处理，且依据事务的不同阶段TRANS_STMT_BEGIN、TRANS_STMT_START、TRANS_STMT_COMMIT等进行不同的处理
+
+1、XID在存储时是按照数字顺序而不是逻辑顺序，只是为了能够快速查找
+
+
+2、事务的状态可以从两个角度进行查看，一个是server端、另一个是client query端。
+	server端通过定义枚举类型“typedef enum TransState”标识；
+	client端通过定义枚举类型“typedef enum TBlockState”标识；
+	这两个类型统一包含到结构体“typedef struct TransactionStateData”中。
+
+
+3、在CN、DN间进行通信时涉及一个参数“CID”（Command ID），该参数用于对执行的命令进行标记，同时定义了以下赋值参数
+	static bool isCommandIdReceived;
+	static bool sendCommandId;
+	static CommandId receivedCommandId;
+
+
+4、在XL、XC中一个新XID的产生过程与GTM相关连(需要GTM的Timestamp)，计算函数为“GetNewTransactionId->BeginTranGTM”
+
+
+5、如何理解”transaction block“
+	例如事务”BEGIN; Update Stock set Unit_price = Unit_price+0.5 where ID = 2; Update Stock set Quantity = Quantity+50 where ID = 1;  COMMIT;“执行了一系列的操作，这些操作整个组成一个”transaction block“。在PG源码XC、XL中经常出现”***TransactionBlock*“相关的函数、变量。
+
+
+6、PG中子事务即SAVEPOINT，具体来说，PG支持创建子事务(SAVEPOINT)、回滚子事务（ROLLBACK TO SAVEPOINT）、释放子事务（RELEASE SAVEPOINT）等操作。PostgreSQL能够提供在发生错误时自动回滚到上一保存点，而无需回滚整个事务；或者在任意时刻回滚到某一特定保存点的状态，而放弃事务中的部分修改的能力。总体来说，PG的子事务是栈模式，每次新创建子事务就压栈进去。而如果当前事务中如果有多个子事务，则前一个子事务是它后面一个子事务的父事务（parent）；通过不断地压栈和出栈，修改事务块状态实现子事务的定义、回滚、提交。
+	子事务与主事务在COMMIT和ABORT时与主事务的区别和联系如下：
+		1）子事务一定需要在父事务中定义，无法不定义父事务而单独定义某个子事务；
+		2）无法单独COMMIT某个子事务/保存点，父事务提交时会自动提交其中定义的所有子事务；
+		3）在没有子事务的场景下，内部错误或者外部ROLLBACK命令都一定必须ABORT整个事务；
+		4）接受外部ROLLBACK指令而产生的ROLLBACK，会ABORT当前父事务和其中定义的所有的子事务；
+		5）内部错误产生的ROLLBACK会ROLLBACK当前子事务，而不影响之前定义的子事务的状态。
+
+	子事务在某些情况下会消耗事务号 XID：
+		PG 对于只包含 select 语句的事务并不会分配 xid，但是在子事务场景下，则可能为一个只包含 select 语句的子事务分配 xid。举个例子，如下“begin; select * from t; savepoint s1; select * from t; savepoint s2; select * from t; savepoint s3; insert into t values(1); commit;"当执行到 insert 语句时，将会给 s1,s2,s3 三个子事务分配 xid。在 PG 数据库中，事务号 xid 是一种宝贵的资源，但如果使用了子事务，将可能导致事务号 xid 消耗加快。
+	postgres-xl暂不支持savepoint，即没有子事务。
+
+
+
+
+
+
+
+
