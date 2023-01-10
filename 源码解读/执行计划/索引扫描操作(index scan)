@@ -63,6 +63,7 @@
 	|		index_rescan				|				amrescan		|				btrescan						|
 	|		index_getbitmap			|				amgetbitmap		|				btgetbitmap					|
 	|		index_build					|				ambuild				|				btbuild							|
+	|		index_insert				|				aminsert			|				btinsert						|
 
 
 
