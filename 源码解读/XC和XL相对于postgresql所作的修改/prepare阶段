@@ -1,0 +1,9 @@
+1、位于文件”src/backend/commands/prepare.c“中，在函数”InitQueryHashTable“中，添加如下代码，用于在CN上构建可以访问DN的”query hash table“
+	if (IS_PGXC_COORDINATOR)	{
+		MemSet(&hash_ctl, 0, sizeof(hash_ctl));
+		hash_ctl.keysize = NAMEDATALEN;
+		hash_ctl.entrysize = sizeof(DatanodeStatement) + NumDataNodes * sizeof(int);
+		datanode_queries = hash_create("Datanode Queries", 64, &hash_ctl, HASH_ELEM);
+	}
+
+
