@@ -1,0 +1,65 @@
+XL在PG的基础上新增了“EXECUTE DIRECT ON ( nodename [, ... ] ) query”的语法格式
+
+
+示例如下，通过psql连接名为“coord1”的CN，并只在名为“datanode_1”的DN上执行query
+	postgres=# EXECUTE DIRECT ON (datanode_1) 'SELECT * FROM account';
+		id | name | money
+		----+------+-------
+		2 | 李四 |    20
+		6 | 八   |    10
+		8 | 八   |    10
+		9 | 九   |    10
+		5 | 七   |     0
+		1 | 张三 |   -50
+		(6 rows)
+
+
+
+涉及处理该语句的函数为“pgxc_direct_planner”
+	PlannedStmt *pgxc_direct_planner(Query *query, int cursorOptions, ParamListInfo boundParams){
+		PlannedStmt *result;
+		RemoteQuery *query_step = NULL;
+
+		/* build the PlannedStmt result */
+		result = makeNode(PlannedStmt);
+
+		/* Try and set what we can */
+		result->commandType = query->commandType;
+		result->canSetTag = query->canSetTag;
+		result->utilityStmt = query->utilityStmt;
+		result->rtable = query->rtable;
+
+		/* EXECUTE DIRECT statements have their RemoteQuery node already built when analyzing */
+		if (query->utilityStmt	&& IsA(query->utilityStmt, RemoteQuery)){
+			RemoteQuery *stmt = (RemoteQuery *) query->utilityStmt;
+			if (stmt->exec_direct_type != EXEC_DIRECT_NONE){
+				query_step = stmt;
+				query->utilityStmt = NULL;
+				result->utilityStmt = NULL;
+			}
+		}
+
+		Assert(query_step);
+		/* Optimize multi-node handling */
+		query_step->read_only = query->commandType == CMD_SELECT;
+
+		result->planTree = (Plan *) query_step;
+
+		query_step->scan.plan.targetlist = query->targetList;
+
+		return result;
+	}
+
+
+
+在CN1中，直接调用函数“pgxc_direct_planner”进行处理而不是“standard_planner”中原始的处理流程。处理结束后，在executor执行过程中，直接与datanode_1进行“SET global_session TO coord1_31894;SET parentPGXCPid TO 31894;”、timestamp、“BEGIN”、“SET LOCAL coordinator_lxid TO "3";”、“SELECT * FROM account”、“COMMIT TRANSACTION”、“RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session“等常规信息交互，以及获取datanode_1中的查询数据。
+
+
+在datanode_1中，则执行常规流程，获取来自CN1中的SET global_session TO coord1_31894;SET parentPGXCPid TO 31894;”、timestamp、“BEGIN”、“SET LOCAL coordinator_lxid TO "3";”、“SELECT * FROM account”、“COMMIT TRANSACTION”、“RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session“等常规信息，并执行”SELECT * FROM account“获取数据，以及通过printup调用pglib将数据发送给CN1.
+
+
+
+
+
+
+
