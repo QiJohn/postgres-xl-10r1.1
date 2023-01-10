@@ -4,7 +4,7 @@ of two source files, locator.c and redistrib.c. The former provide fundamental f
 determine nodes over which given table is replicated or distributed. The latter handles row
 redistribution as a part of ALTER TABLE command.
 
-
+Locator模块用于给每个SQL statement、row、整个table确定目标DN
 
 
 1、===============src/backend/pgxc/locator/locator.c
