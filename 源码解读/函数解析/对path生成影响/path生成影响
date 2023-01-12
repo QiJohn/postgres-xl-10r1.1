@@ -1,33 +1,31 @@
-1、================对remotesubplan_path的影响
-在创建RemoteSubPath节点时，需要获取“Distribution”类型节点参数，依据该Distribution对data进行重新分布
-	Path *create_remotesubplan_path(PlannerInfo *root, Path *subpath,
-							Distribution *distribution)
-	{
-		RelOptInfo	   *rel = subpath->parent;
-		RemoteSubPath  *pathnode;
-		Distribution   *subdistribution = subpath->distribution;
+1、 == == == == == == == == 对remotesubplan_path的影响 在创建RemoteSubPath节点时，需要获取“Distribution”类型节点参数，依据该Distribution对data进行分布
 
-		pathnode = makeNode(RemoteSubPath);
-		pathnode->path.pathtype = T_RemoteSubplan;
-		pathnode->path.parent = rel;
-		pathnode->path.param_info = subpath->param_info;
-		pathnode->path.pathkeys = subpath->pathkeys;
-		pathnode->subpath = subpath;
-		pathnode->path.distribution = (Distribution *) copyObject(distribution);
+Path *create_remotesubplan_path(PlannerInfo *root, Path *subpath, Distribution *distribution)
+{
+	RelOptInfo *rel = subpath->parent;
+	RemoteSubPath *pathnode;
+	Distribution *subdistribution = subpath->distribution;
 
-		/* We don't want to run subplains in parallel workers */
-		pathnode->path.parallel_aware = false;
-		pathnode->path.parallel_safe = false;
+	pathnode = makeNode(RemoteSubPath);
+	pathnode->path.pathtype = T_RemoteSubplan;
+	pathnode->path.parent = rel;
+	pathnode->path.param_info = subpath->param_info;
+	pathnode->path.pathkeys = subpath->pathkeys;
+	pathnode->subpath = subpath;
+	pathnode->path.distribution = (Distribution *)copyObject(distribution);
 
-		pathnode->path.pathtarget = subpath->pathtarget;
+	/* We don't want to run subplains in parallel workers */
+	pathnode->path.parallel_aware = false;
+	pathnode->path.parallel_safe = false;
 
-		cost_remote_subplan((Path *) pathnode, subpath->startup_cost,
-							subpath->total_cost, subpath->rows, rel->reltarget->width,
-							(subdistribution && IsLocatorReplicated(subdistribution->distributionType)) ?
-							bms_num_members(subdistribution->nodes) : 1);
+	pathnode->path.pathtarget = subpath->pathtarget;
 
-		return (Path *) pathnode;
-	}
+	cost_remote_subplan((Path *)pathnode, subpath->startup_cost,
+						subpath->total_cost, subpath->rows, rel->reltarget->width,
+						(subdistribution && IsLocatorReplicated(subdistribution->distributionType)) ? bms_num_members(subdistribution->nodes) : 1);
+
+	return (Path *)pathnode;
+}
 
 调用”create_remotesubplan_path“的函数有：recurse_set_operations、adjust_path_distribution、create_distinct_paths、create_one_window_path、create_window_paths、consider_groupingsets_paths、create_grouping_paths、grouping_planner
 
@@ -35,7 +33,7 @@
 
 2、================对join_path、nestloop_path的影响
 在创建join_path的函数create_hashjoin_path、create_mergejoin_path、create_nestloop_path中，都会调用函数set_joinpath_distribution来设置postgres-xl的join节点的分布方式；
-在函数”set_joinpath_distribution“中，又会调用函数”redistribute_path“进行重新分布路径以匹配所需的分布参数。
+在函数”set_joinpath_distribution“中，又会调用函数”redistribute_path“进行重新分布路径以匹配所需的分布参数。在函数”redistribute_path“中构建一个”T_RemoteSubplan“类型的path
 	/*
 	*分析Join参数，设置Join节点分布。
 	*如果存在可能的替代分发，则以列表形式返回各自的路径，以便调用者可以计算所有路径的成本，并选择最便宜继续。
