@@ -9,7 +9,7 @@
 
 
 =================================distribute示例===============================
-使用psql连接CN100，并执行sql语句”select * from t1 inner join t2 on col1 = col3“，其对应的执行计划如下所示：
+使用psql连接CN1，并执行sql语句”select * from t1 inner join t2 on col1 = col3“，其对应的执行计划如下所示：
 	postgres=# explain select * from t1 inner join t2 on col1 = col3;
 								QUERY PLAN
 	------------------------------------------------------------------------
@@ -60,8 +60,8 @@
 
 
 
-=================================redistribute示例===============================
-使用psql连接CN100，并执行sql语句”select * from t1 inner join t2 on col2 = col3“，其对应的执行计划如下所示：
+=================================redistribute示例（重分布）===============================
+使用psql连接CN1，并执行sql语句”select * from t1 inner join t2 on col2 = col3“，其对应的执行计划如下所示：
 	postgres=# explain select * from t1 inner join t2 on col2 = col3;
 													QUERY PLAN
 	----------------------------------------------------------------------------------------------------------
