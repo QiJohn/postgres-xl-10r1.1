@@ -1,0 +1,97 @@
+创建表语句
+	create table t1 (col1 int, col2 int) distribute by hash(col1);
+	create table t2 (col3 int, col4 int) distribute by hash(col3);
+
+插入数据语句
+	INSERT INTO t1(col1, col2) select n,floor(random()*100)+1 from generate_series(1,10) n;
+	INSERT INTO t2(col3, col4) select n,floor(random()*100)+1 from generate_series(1,10) n;
+
+
+
+=================================示例===============================
+使用psql连接CN1，并执行sql语句”select * from t1 inner join t2 on col2 = col3“，其对应的执行计划如下所示：
+	postgres=# explain select * from t1 inner join t2 on col2 = col3;
+													QUERY PLAN
+	----------------------------------------------------------------------------------------------------------
+	Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=317.01..711.38 rows=25538 width=16)
+	->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+			Merge Cond: (t1.col2 = t2.col3)
+			->  Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=258.51..293.54 rows=2260 width=8)
+				Distribute results by H: col2
+				->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+						Sort Key: t1.col2
+						->  Seq Scan on t1  (cost=0.00..32.60 rows=2260 width=8)
+			->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+				Sort Key: t2.col3
+				->  Seq Scan on t2  (cost=0.00..32.60 rows=2260 width=8)
+	(11 rows)
+
+
+【在CN1中】
+------------------------初始化RemoteSubplan----------------------------------------------------------------------------------------------------------
+某一时刻函数栈的内容如下所示：
+#0  PoolManagerGetConnections (datanodelist=0x14e4f40, coordlist=0x0, pids=0x7fffe48e6d50) at poolmgr.c:1231
+#1  0x000000000073a40f in get_handles (datanodelist=0x14d3ad8, coordlist=0x0, is_coord_only_query=0 '\000', is_global_session=1 '\001') at pgxcnode.c:2371
+#2  0x000000000074726f in ExecFinishInitRemoteSubplan (node=0x14d3898) at execRemote.c:5710
+#3  0x000000000074706c in ExecInitRemoteSubplan (node=0x14d99f8, estate=0x14d3680, eflags=16) at execRemote.c:5643
+#4  0x00000000006d9d6b in ExecInitNode (node=0x14d99f8, estate=0x14d3680, eflags=16) at execProcnode.c:378
+#5  0x00000000006d3bcf in InitPlan (queryDesc=0x13dff60, eflags=16) at execMain.c:1107
+#6  0x00000000006d2946 in standard_ExecutorStart (queryDesc=0x13dff60, eflags=16) at execMain.c:313
+#7  0x00000000006d2578 in ExecutorStart (queryDesc=0x13dff60, eflags=0) at execMain.c:162
+#8  0x00000000008e3b52 in PortalStart (portal=0x14d7680, params=0x0, eflags=0, snapshot=0x0) at pquery.c:868
+#9  0x00000000008dc863 in exec_simple_query (query_string=0x1432810 "select * from t1 inner join t2 on col2 = col3;") at postgres.c:1324
+#10 0x00000000008e130c in PostgresMain (argc=1, argv=0x13e3920, dbname=0x13e37b8 "postgres", username=0x13e3798 "zq") at postgres.c:4731
+#11 0x00000000008410b5 in BackendRun (port=0x13dbed0) at postmaster.c:4628
+#12 0x000000000084083d in BackendStartup (port=0x13dbed0) at postmaster.c:4300
+#13 0x000000000083ca34 in ServerLoop () at postmaster.c:1857
+#14 0x000000000083c073 in PostmasterMain (argc=8, argv=0x13b3b30) at postmaster.c:1465
+#15 0x000000000075c636 in main (argc=8, argv=0x13b3b30) at main.c:228
+
+
+在RemoteSubplan初始化成功后，执行函数ExecFinishInitRemoteSubplan过程中进行如下处理
+	第一：间接调用PoolManagerGetConnections与DN1、DN2建立soceket连接。【ps：在建立socket连接后DN1、DN2会fork出新的进程，用于进行后续的交互】
+	第二：获取socket连接，调用pgxc_node_begin、pgxc_node_send_timestamp、pgxc_node_send_snapshot、pgxc_node_send_cmd_id给DN1、DN2的进程发送数据
+	第三：获取socket连接，并将子计划树(即merge子计划)，通过函数pgxc_node_send_plan分布发送给DN1、DN2的进程进行处理
+
+
+
+
+
+------------------------执行RemoteSubplan----------------------------------------------------------------------------------------------------------
+某一时刻函数栈的内容如下所示：
+#0  ExecRemoteSubplan (pstate=0x1d20688) at execRemote.c:5906
+#1  0x00000000006da0a7 in ExecProcNodeFirst (node=0x1d20688) at execProcnode.c:529
+#2  0x00000000006d2448 in ExecProcNode (node=0x1d20688) at ../../../src/include/executor/executor.h:263
+#3  0x00000000006d4e88 in ExecutePlan (estate=0x1d20470, planstate=0x1d20688, use_parallel_mode=0 '\000', operation=CMD_SELECT, sendTuples=1 '\001', numberTuples=0,
+    direction=ForwardScanDirection, dest=0x1d13b38, execute_once=1 '\001') at execMain.c:1793
+#4  0x00000000006d2bb0 in standard_ExecutorRun (queryDesc=0x1c1a950, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:413
+#5  0x00000000006d29a9 in ExecutorRun (queryDesc=0x1c1a950, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:355
+#6  0x00000000008e4a91 in PortalRunSelect (portal=0x1d0a3a0, forward=1 '\001', count=0, dest=0x1d13b38) at pquery.c:1462
+#7  0x00000000008e418d in PortalRun (portal=0x1d0a3a0, count=9223372036854775807, isTopLevel=1 '\001', run_once=1 '\001', dest=0x1d13b38, altdest=0x1d13b38,
+    completionTag=0x7ffc85ecf680 "") at pquery.c:1133
+#8  0x00000000008dc971 in exec_simple_query (query_string=0x1c69350 "select * from t1 inner join t2 on col2 = col3;") at postgres.c:1363
+#9  0x00000000008e130c in PostgresMain (argc=1, argv=0x1c1d920, dbname=0x1c1d7b8 "postgres", username=0x1c1d798 "zq") at postgres.c:4731
+#10 0x00000000008410b5 in BackendRun (port=0x1c15ed0) at postmaster.c:4628
+#11 0x000000000084083d in BackendStartup (port=0x1c15ed0) at postmaster.c:4300
+#12 0x000000000083ca34 in ServerLoop () at postmaster.c:1857
+#13 0x000000000083c073 in PostmasterMain (argc=8, argv=0x1bedb30) at postmaster.c:1465
+#14 0x000000000075c636 in main (argc=8, argv=0x1bedb30) at main.c:228
+
+
+
+在RemoteSubplan执行过程中，执行函数ExecRemoteSubplan进行如下处理
+	第一：获取与DN1、DN2的进程的socket连接，调用pgxc_node_send_cmd_id、pgxc_node_send_snapshot、pgxc_node_send_bind发送信息
+	第二：获取与DN1、DN2的进程的socket连接，调用pgxc_node_send_execute发送子计划执行命令，并指定最大获取的数据行数；以及调用函数pgxc_node_send_flush进行提交
+	第三：获取DN1、DN2反馈过来的数据
+
+
+
+
+【在DN1中】
+DN节点如同”client--server“模式中的server端，主要依据CN端发送的命令进行对应的处理；
+例如：
+	第一步：在接收到”P“命令，即字符串格式的计划树时，直接使用函数”exec_plan_message“将字符串格式的计划树转换成”plan cache entity“(即数据库中执行计划树)。并存储到名的”Prepared Queries的“hash tbale中
+	第二步：在接收到”E“命令后，则会依据”portal name“从名为”Portal hash“的”hash table“中查找执行计划树，并调用”PortalRun“进行执行
+
+
+
