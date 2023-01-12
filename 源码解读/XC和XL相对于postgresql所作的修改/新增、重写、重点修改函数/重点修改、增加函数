@@ -1,0 +1,93 @@
+1、在文件“src/backend/optimizer/plan/planner.c”中，修改函数“planner”，针对XC，添加如下代码
+	if (IS_PGXC_LOCAL_COORDINATOR) //如果SQL语句是执行在本机CN
+		result = pgxc_planner(parse, cursorOptions, boundParams);
+	else
+
+
+
+2、在文件“src/backend/optimizer/plan/planner.c”中，修改函数“standard_planner”，针对XL，添加如下代码
+	if (IS_PGXC_LOCAL_COORDINATOR && parse->utilityStmt &&
+			sA(parse->utilityStmt, RemoteQuery))//执行在本机CN，且时utility语句，且utility语句为RemoteQuery
+	return pgxc_direct_planner(parse, cursorOptions, boundParams);
+
+
+
+3、位于文件”src/backend/optimizer/plan/subselect.c“中，修改函数”make_subplan“，分别添加如下代码
+	//针对XL
+	if (subroot->distribution){//存在分布式，构建remotesubplan
+		plan = (Plan *) make_remotesubplan(subroot, plan, NULL, subroot->distribution, subroot->query_pathkeys);
+		plan->extParam = bms_copy(plan->lefttree->extParam);
+		plan->allParam = bms_copy(plan->lefttree->allParam);
+	}
+
+	//针对XC
+	if (IS_PGXC_LOCAL_COORDINATOR) //本机CN只需要一个plan，可以退出函数了
+			return result;
+
+
+
+4、位于文件”src/backend/optimizer/plan/createplan.c“中，添加函数”make_remotesubplan“。该函数用户”Create a RemoteSubplan node to execute subplan on remote nodes“。
+	该RemoteSubplan和PG原有的plan是一样的，只不过它在执行的时候是读取从网络（而不是内存或磁盘）得到的中间结果。在make_remotesubplan的时候，需要计算源分布，结果分布和排序。对于不同的操作join，scan，group by都有着不同的分布方式。不过得到的plan是一致的
+	在下列情况下会使用到make_remotesubplan：
+		（1）在函数”create_minmaxagg_plan“中，MinMax聚合path中存在distribution，即MinMaxAggInfo->path->distribution不为空（MinMaxAggInfo为结构体）；
+		（2）函数”create_remotescan_plan“中直接调用；
+		（3）在函数”standard_planner“中，PlannerInfo->distribution不为空时调用；
+		（4）在函数”make_subplan“中，PlannerInfo->distribution不为空时调用；
+		（5）在函数”SS_process_ctes“中，PlannerInfo->distribution不为空时调用；
+
+
+
+5、位于文件”src/backend/executor/execProcnode.c”中，修改函数“ExecInitNode”，分别添加如下代码
+	//针对XC
+	case T_RemoteQuery:
+		result = (PlanState *) ExecInitRemoteQuery((RemoteQuery *) node, estate, eflags);
+		break;
+
+	//针对XL
+	case T_RemoteSubplan:
+		result = (PlanState *) ExecInitRemoteSubplan((RemoteSubplan *) node, estate, eflags);
+		break;
+
+
+
+6、位于文件”src/backend/executor/execProcnode.c”中，针对XC，新增函数“ExecFinishInitProcNode”，用于循环递归调用完成初始化的最后工作
+
+
+
+7、位于文件”src/backend/executor/execProcnode.c”中，修改函数“ExecEndNode”，分别添加如下代码
+	//针对XC
+	case T_RemoteQuery:
+		ExecEndRemoteQuery((RemoteQueryState *) node);
+		break;
+
+	//针对XL
+	case T_RemoteSubplan:
+		ExecEndRemoteSubplan((RemoteSubplanState *) node);
+		break;
+
+
+
+8、位于文件”src/backend/pgxc/pool/execRemote.c“中，添加一组函数”ExecInitRemoteQuery“、”ExecRemoteQuery“、”ExecEndRemoteQuery“。
+	在使用过程中，先使用ExecInitRemoteQuery包装待执行的query，在使用ExecRemoteQuery将query发送给对应的CN、DN（该函数通过直接调用一系列”pgxc_node_send_xxxx“函数实现功能），最后调用ExecEndRemoteQuery进行结束。对与该组函数的使用流程如下所示：
+		第一步：调用函数”makeNode“构建执行节点，如”RemoteQuery  step = makeNode(RemoteQuery)“
+		第二步：给构建的RemoteQuery设置相关参数，如设置待执行的sql语句”step->sql_statement = ”select  *  from  account“ “
+		第三步：调用函数”ExecInitRemoteQuery“对RemoteQuery进行处理，获取RemoteQueryState，如”RemoteQueryState *node = ExecInitRemoteQuery(step, (EState*)estate, 0)“
+		第四步：调用函数”ExecRemoteQuery“执行RemoteQueryState获取结果，如”TupleTableSlot *result = ExecRemoteQuery((PlanState *) node)“
+		第五步：调用函数”ExecEndRemoteQuery“结束执行，如”ExecEndRemoteQuery(node)“
+
+
+
+9、在文件”src/backend/access/hash/hashfunc.c“新增函数”compute_hash“、”get_compute_hash_function“，用于实现”基于datatype获取hash函数，并通过hash函数计算数据的distribution“
+
+
+
+
+10、在文件”src/backend/pgxc/pool/execRemote.c“新增函数”ExecRemoteUtility“，该函数用于在所有datanode上执行”utility statement“，例如将DDL语句转发到所有的CN、DN上。
+	（1）该函数的输入参数为一个”RemoteQuery“类型的node，对应的sql语句都封装在”RemoteQuery->sql_statement“中
+	（2）该直接通过调用对应的一系列”pgxc_node_send_xxxx“函数实现功能
+	（3）与”ExecInitRemoteQuery“、”ExecRemoteQuery“、”ExecEndRemoteQuery“对比而言，前者是一个函数直接执行utility，后者是通过一组函数实现一个query的执行
+
+
+
+
+
