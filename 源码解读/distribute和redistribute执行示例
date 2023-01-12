@@ -1,0 +1,185 @@
+创建表语句
+	create table t1 (col1 int, col2 int) distribute by hash(col1);
+	create table t2 (col3 int, col4 int) distribute by hash(col3);
+
+插入数据语句
+	INSERT INTO t1(col1, col2) select n,floor(random()*100)+1 from generate_series(1,10) n;
+	INSERT INTO t2(col3, col4) select n,floor(random()*100)+1 from generate_series(1,10) n;
+
+
+
+=================================distribute示例===============================
+使用psql连接CN100，并执行sql语句”select * from t1 inner join t2 on col1 = col3“，其对应的执行计划如下所示：
+	postgres=# explain select * from t1 inner join t2 on col1 = col3;
+								QUERY PLAN
+	------------------------------------------------------------------------
+	Remote Fast Query Execution  (cost=0.00..0.00 rows=0 width=0)
+	Node/s: datanode_1, datanode_2
+	->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+			Merge Cond: (t1.col1 = t2.col3)
+			->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+				Sort Key: t1.col1
+				->  Seq Scan on t1  (cost=0.00..32.60 rows=2260 width=8)
+			->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+				Sort Key: t2.col3
+				->  Seq Scan on t2  (cost=0.00..32.60 rows=2260 width=8)
+	(10 rows)
+
+
+【在CN1中】
+第一步：获取query内容为”select * from t1 inner join t2 on col1 = col3“，并调用函数”exec_simple_query“进行执行，执行过程中存在以下依次函数调用：
+	RelationBuildLocator
+	GetRelationNodes、createLocator、hash_func_ptr、locate_hash_select
+
+第二步：与DN1、DN2进行交互，依次通过函数”pgxc_node_send_xxxx“发送如下信息，并获取回复信息和查询数据
+	SET global_session TO coord1_16494;SET parentPGXCPid TO 16494
+	时间戳信息、command id、snapshot
+	SELECT t1.col1, t1.col2, t2.col3, t2.col4 FROM (t1 JOIN t2 ON ((t1.col1 = t2.col3)))
+	RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session
+
+
+
+【在DN1中】
+获取query内容为”SET global_session TO coord1_16494;SET parentPGXCPid TO 16494“，并调用函数”exec_simple_query“进行执行
+获取query内容为”SELECT t1.col1, t1.col2, t2.col3, t2.col4 FROM (t1 JOIN t2 ON ((t1.col1 = t2.col3)))“，并调用函数”exec_simple_query“进行执行，执行过程中存在以下依次函数调用：
+	create_seqscan_path，set_scanpath_distribution                      //无需调用redistribute_path进行重分布
+	create_mergejoin_path，set_joinpath_distribution                   //无需调用redistribute_path进行重分布
+	create_hashjoin_path，set_joinpath_distribution                      //无需调用redistribute_path进行重分布
+	standard_ExecutorStart
+	standard_ExecutorRun
+	调用printup将查询并mergejoin的数据发送给CN1
+	standard_ExecutorFinish
+	standard_ExecutorEnd
+
+获取query内容为”RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session“，并调用函数”exec_simple_query“进行执行
+
+
+
+
+
+
+
+
+=================================redistribute示例===============================
+使用psql连接CN100，并执行sql语句”select * from t1 inner join t2 on col2 = col3“，其对应的执行计划如下所示：
+	postgres=# explain select * from t1 inner join t2 on col2 = col3;
+													QUERY PLAN
+	----------------------------------------------------------------------------------------------------------
+	Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=317.01..711.38 rows=25538 width=16)
+	->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+			Merge Cond: (t1.col2 = t2.col3)
+			->  Remote Subquery Scan on all (datanode_1,datanode_2)  (cost=258.51..293.54 rows=2260 width=8)
+				Distribute results by H: col2
+				->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+						Sort Key: t1.col2
+						->  Seq Scan on t1  (cost=0.00..32.60 rows=2260 width=8)
+			->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+				Sort Key: t2.col3
+				->  Seq Scan on t2  (cost=0.00..32.60 rows=2260 width=8)
+	(11 rows)
+
+共包含两个计划树：完整的计划树Merge Join、子计划树Sort
+
+【在CN1中】
+第一步：获取query内容为”select * from t1 inner join t2 on col2 = col3“，并调用函数”exec_simple_query“进行执行，执行过程中存在以下依次函数调用：
+	RelationBuildLocator
+	GetRelationNodes、createLocator、hash_func_ptr、locate_hash_select
+	create_seqscan_path，set_scanpath_distribution、redistribute_path
+	create_mergejoin_path，set_joinpath_distribution、redistribute_path
+	create_hashjoin_path，set_joinpath_distribution、redistribute_path
+
+第二步：与DN1、DN2进行交互，依次通过函数”pgxc_node_send_xxxx“发送如下信息，并获取回复信息和查询数据
+	SET global_session TO coord1_48714;SET parentPGXCPid TO 48714
+	时间戳信息
+	BEGIN
+	SET LOCAL coordinator_lxid TO "3"
+	时间戳信息、command id、snapshot
+	Remote Subplan（计划树）
+
+第三步：发送完”Remote Subplan“后，在该函数中依次执行如下函数，并通过”pgxc_node_receive“从DN获取数据
+	standard_ExecutorRun
+	ExecutePlan
+	ExecRemoteSubplan（在该函数中又会调用pgxc_node_send_cmd_id、pgxc_node_send_snapshot、pgxc_node_send_bind、pgxc_node_send_execute、pgxc_node_send_flush）
+	standard_ExecutorFinish
+	standard_ExecutorEnd
+
+第四步：与DN1、DN2进行交互，依次通过函数”pgxc_node_send_xxxx“发送如下信息，并获取回复信息和查询数据
+	COMMIT TRANSACTION
+	RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session
+
+
+
+
+【在DN1中】
+-------进程48736中------------------------------------------------------------------------------------------------
+	第一步：依次获取如下内容的query，并调用函数”exec_simple_query“进行执行：
+		SET global_session TO coord1_48714;SET parentPGXCPid TO 48714
+		BEGIN
+		SET LOCAL coordinator_lxid TO "3"
+
+	第二步：获取query为”Remote Subplan“的计划树（来自CN1的完整计划树），并调用函数”“进行处理，处理过程依次如下所示：
+		调用函数”exec_plan_message“依据输入的计划树构建plan cache entry
+
+	第三步：获取snapshot、bind命令后，分别与DN1中进程48740和DN2中进程48744建立连接，都进行了如下操作：
+		调用”pgxc_node_send_query“发送”SET  global_session TO coord1_48714;SET  parentpgxcpid TO "48714";SET parentPGXCPid TO 48736“
+		调用”pgxc_node_send_timestamp“发送时间戳
+		调用”pgxc_node_send_query“发送”BEGIN“
+		调用”pgxc_node_send_query“发送”SET LOCAL coordinator_lxid TO "6"“
+		调用”pgxc_node_send_snapshot“发送快照
+		调用”pgxc_node_send_plan“发送子计划（sort子计划树）
+
+	第四步：获取execute命令后，调用函数”exec_execute_message“，执行之前还原的执行计划树
+		调用函数”portalRun“
+		standard_ExecutorRun
+		ExecRemoteSubplan
+		【与DN1中进程48740和DN2中进程48744建立通信，分别调用函数pgxc_node_send_cmd_id、pgxc_node_send_snapshot、pgxc_node_send_bind、pgxc_node_send_execute、pgxc_node_send_flush执行发送出去的子计划（sort子计划），并获取数据。并在结束后调用函数pgxc_node_send_close、pgxc_node_send_sync关闭连接】
+		standard_ExecutorFinish
+		standard_ExecutorEnd
+
+	第三步：依次获取如下内容的query，并调用函数”exec_simple_query“进行执行：
+		COMMIT TRANSACTION【在处理”COMMIT TRANSACTION“过程中，调用函数”pgxc_node_send_query“分别给DN1中进程48740和DN2中进程48744发送”COMMIT TRANSACTION“、”RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session“】
+		RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session
+
+
+
+----------进程48740中------------------------------------------------------------------------------------------------
+	第一步：依次获取如下内容的query，并调用函数”exec_simple_query“进行执行：
+		SET  global_session TO coord1_48714;SET  parentpgxcpid TO "48714";SET parentPGXCPid TO 48736
+		BEGIN
+		SET LOCAL coordinator_lxid TO "6"
+
+	第二步：获取”P“命令，query为”Remote Subplan“的计划树（来自DN1其它进程的sort子计划树），并进行处理，处理过程依次如下所示：
+		调用函数”exec_plan_message“依据输入的计划树构建plan cache entry
+
+	第三步：获取snapshot、bind命令后，获取”execute“命令，执行之前还原的执行计划树
+		调用函数”portalRun“
+		standard_ExecutorStart
+		【执行SeqScan获取数据，需要发送给DN2的数据，使用SharedQueueAcquire、SharedQueueBind、SharedQueueWrite写入sequence；否则写入本地tuple（参考sequence通信）】
+		standard_ExecutorFinish
+		standard_ExecutorEnd
+
+	第四步：依次获取如下内容的query，并调用函数”exec_simple_query“进行执行：
+		COMMIT TRANSACTION
+		RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session
+
+
+-------进程48746中------------------------------------------------------------------------------------------------
+	第一步：依次获取如下内容的query，并调用函数”exec_simple_query“进行执行：
+		SET  global_session TO coord1_48714;SET  parentpgxcpid TO "48714";SET parentPGXCPid TO 48738
+		BEGIN
+		SET LOCAL coordinator_lxid TO "4"
+
+	第二步：获取”P“命令，query为”Remote Subplan“的计划树（来自DN2进程的sort子计划树），并进行处理，处理过程依次如下所示：
+		调用函数”exec_plan_message“依据输入的计划树构建plan cache entry，即将以字符串格式进行描述的计划树还原到XL内存中的执行计划树
+
+	第三步：获取execute命令后，调用函数”exec_execute_message“，执行之前还原的执行计划树
+		调用函数”portalRun“
+		standard_ExecutorStart
+		【调用SharedQueueAcquire访问sequence，并将数据发送给DN2（参考sequence通信）】
+		standard_ExecutorFinish
+		standard_ExecutorEnd
+
+	第四步：依次获取如下内容的query，并调用函数”exec_simple_query“进行执行：
+		COMMIT TRANSACTION
+		RESET ALL;RESET SESSION AUTHORIZATION;RESET transaction_isolation;RESET global_session
+
