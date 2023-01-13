@@ -37,30 +37,29 @@ get_exec_connections(RemoteQueryState *planstate,
 	{
 		if (exec_nodes->en_expr) //执行(execute)时期确定涉及的node，例如：insert数据
 		{
-			。。。。
-			ExecNodes *nodes = GetRelationNodes(rel_loc_info, partvalue, isnull,exec_nodes->accesstype); //计算涉及的node，如，query需要分发给哪些DN
-			。。。。
+			............ ExecNodes *nodes = GetRelationNodes(rel_loc_info, partvalue, isnull, exec_nodes->accesstype); // 计算涉及的node，如，query需要分发给哪些DN
+			............
 		}else if (OidIsValid(exec_nodes->en_relid))	{
 			RelationLocInfo *rel_loc_info = GetRelationLocInfo(exec_nodes->en_relid);
 			ExecNodes *nodes = GetRelationNodes(rel_loc_info, 0, true, exec_nodes->accesstype);  //计算涉及的node，如，query需要分发给哪些DN
-			。。。。
+			............
 		}else{  //例如：select数据
 			/*连接涉及所有DN、CN、nodelist*/
 		}
 	}
-	。。。。
-	/*计算涉及的DN数目：dn_conn_count
-	   计算涉及的CN数目：co_conn_count
-	   设置node list*/
+	...........
+		/*计算涉及的DN数目：dn_conn_count
+		   计算涉及的CN数目：co_conn_count
+		   设置node list*/
 
-	/* Get other connections (non-primary) */
-	pgxc_handles = get_handles(nodelist, coordlist, is_query_coord_only, is_global_session); //获取DN、CN节点connection的句柄
+		/* Get other connections (non-primary) */
+		pgxc_handles = get_handles(nodelist, coordlist, is_query_coord_only, is_global_session); // 获取DN、CN节点connection的句柄
 
 	/*获取primary node使用的connection*/
-	。。。。
+	............
 
-	/* Depending on the execution type, we still need to save the initial node counts */
-	pgxc_handles->dn_conn_count = dn_conn_count;
+		/* Depending on the execution type, we still need to save the initial node counts */
+		pgxc_handles->dn_conn_count = dn_conn_count;
 	pgxc_handles->co_conn_count = co_conn_count;
 
 	return pgxc_handles;
