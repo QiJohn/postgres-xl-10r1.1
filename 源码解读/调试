@@ -13,5 +13,6 @@
 	GDB提供了格式化输出显示结构体的选项”print pretty“， 这个选项的默认是关闭的，通过命令”set print pretty on“打开该选项即可通过print格式化输出内容
 
 
-
+3、== == == == == = gdb调试过程中执行函数
+	例如：调试过程中使用函数”list_length“计算”node->nodeList“的长度，可以直接使用”print list_length(node->nodeList)“
 
