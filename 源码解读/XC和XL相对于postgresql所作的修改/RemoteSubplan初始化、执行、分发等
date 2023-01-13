@@ -27,9 +27,9 @@
 	(11 rows)
 
 
-【在CN1中】
+
 ------------------------初始化RemoteSubplan----------------------------------------------------------------------------------------------------------
-某一时刻函数栈的内容如下所示：
+【在CN1中】某一时刻函数栈的内容如下所示：
 #0  PoolManagerGetConnections (datanodelist=0x14e4f40, coordlist=0x0, pids=0x7fffe48e6d50) at poolmgr.c:1231
 #1  0x000000000073a40f in get_handles (datanodelist=0x14d3ad8, coordlist=0x0, is_coord_only_query=0 '\000', is_global_session=1 '\001') at pgxcnode.c:2371
 #2  0x000000000074726f in ExecFinishInitRemoteSubplan (node=0x14d3898) at execRemote.c:5710
@@ -58,7 +58,7 @@
 
 
 ------------------------执行RemoteSubplan----------------------------------------------------------------------------------------------------------
-某一时刻函数栈的内容如下所示：
+【在CN1中】某一时刻函数栈的内容如下所示：
 #0  ExecRemoteSubplan (pstate=0x1d20688) at execRemote.c:5906
 #1  0x00000000006da0a7 in ExecProcNodeFirst (node=0x1d20688) at execProcnode.c:529
 #2  0x00000000006d2448 in ExecProcNode (node=0x1d20688) at ../../../src/include/executor/executor.h:263
@@ -87,11 +87,24 @@
 
 
 
-【在DN1中】
+
 DN节点如同”client--server“模式中的server端，主要依据CN端发送的命令进行对应的处理；
-例如：
-	第一步：在接收到”P“命令，即字符串格式的计划树时，直接使用函数”exec_plan_message“将字符串格式的计划树转换成”plan cache entity“(即数据库中执行计划树)。并存储到名的”Prepared Queries的“hash tbale中
-	第二步：在接收到”E“命令后，则会依据”portal name“从名为”Portal hash“的”hash table“中查找执行计划树，并调用”PortalRun“进行执行
+例如【在DN1中】：
+	第一步：在接收到”P“命令，获取字符串格式的计划树时，直接使用函数”exec_plan_message“将字符串格式的计划树转换成”plan cache entity“(即CachedPlanSource)，并扩展成”PreparedStatement“，存储到名的”Prepared Queries的“hash tbale中
+	第二步：在接收到”Bind“命令后，执行exec_bind_message函数，在该函数中依次进行如下处理
+		第一步：从名为”Prepared Queries的“hash tbale中获取”PreparedStatement“
+		第二步：创建Portal，并将该portal存储到名为”Portal hash“的”hash table“中
+		第三步：依据获取的”PreparedStatement“对创建的Portal进行设置
+		第四步：调用”PortalStart“，来间接调用”ExecutorStart->InitPlan->ExecInitNode“，从而实现各类型node的初始化【当此处构建的plan tree需要调用ExecInitRemoteSubplan时，依旧会涉及另一个子计划的分发】
+	第三步：在接收到”E“命令后，依据”portal name“从名为”Portal hash“的”hash table“中查找执行计划树，并调用”PortalRun“进行执行
+		【在PortalRun执行过程中，涉及到与其它进程进行涉及数据库中数据交互时，使用pgxc_node_receive进行接收；使用printtup进行发送】
+	第四步：在接收到”C“命令后，结束执行
 
 
 
+
+
+------------------------分发RemoteSubplan----------------------------------------------------------------------------------------------------------
+将RemoteSubplan分发给其它进程或者node主要通过函数”pgxc_node_send_plan“实现。
+何时分发RemoteSubplan：
+	在进行RemoteSubplan初始化结束后分发，即执行函数”ExecFinishInitRemoteSubplan“过程中调用”pgxc_node_send_plan“
