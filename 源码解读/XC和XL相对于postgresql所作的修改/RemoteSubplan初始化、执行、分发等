@@ -1,3 +1,30 @@
+=====第一部分================================================plan tree构造过程中===============================================================
+在plan tree的构造过程中，从叶节点开始一步步构造到根节点，当遇到需要对该plan进行转发时，就构造一个remoteSubplan节点作为当前plan的父节点。
+示例如下所示：
+	【原始代码简述如下】
+		subplan1 = create_plan_recurse(root, subpath, CP_SMALL_TLIST);   //构造plan tree节点
+		。。。。
+		subplan2 = (Plan *) make_sort(subplan1, numsortkeys, sortColIdx, sortOperators,  collations, nullsFirst); //给plan tree添加新的节点（sort节点）
+		。。。。
+		plan = make_remotesubplan(root, subplan2, best_path->path.distribution, best_path->subpath->distribution, best_path->path.pathkeys);
+		 //给plan tree添加新的节点（remotesubplan节点）
+
+
+	【打印变量信息如下】
+		变量”subplan1“信息为：{type = T_SeqScan, startup_cost = 0, total_cost = 32.600000000000001, plan_rows = 2260, plan_width = 8, parallel_aware = 0 '\000', parallel_safe = 1 '\001', plan_node_id = 0, targetlist = 0x1811b50, qual = 0x0, lefttree = 0x0, righttree = 0x0, initPlan = 0x0, extParam = 0x0, allParam = 0x0}
+
+		变量”subplan2“信息为：{type = T_Sort, startup_cost = 158.50580974751887, total_cost = 164.15580974751887, plan_rows = 2260, plan_width = 8, parallel_aware = 0 '\000',  parallel_safe = 1 '\001', plan_node_id = 0, targetlist = 0x1811b50, qual = 0x0, lefttree = 0x1811c08, righttree = 0x0, initPlan = 0x0, extParam = 0x0, allParam = 0x0}
+
+		变量”plan“信息为：{type = T_RemoteSubplan, startup_cost = 258.50580974751887, total_cost = 293.5358097475189, plan_rows = 2260, plan_width = 8, parallel_aware = 0 '\000',  parallel_safe = 0 '\000', plan_node_id = 0, targetlist = 0x1811b50, qual = 0x0, lefttree = 0x1810998, righttree = 0x0, initPlan = 0x0, extParam = 0x0, allParam = 0x0}
+
+		其中变量”plan->lefttree“指向变量“subplan2”；变量”subplan2->lefttree“指向变量”subplan1“，这构成一个plan tree。
+
+
+
+
+
+
+=====第二部分===============================================execute的过程中===================================================================
 创建表语句
 	create table t1 (col1 int, col2 int) distribute by hash(col1);
 	create table t2 (col3 int, col4 int) distribute by hash(col3);
@@ -27,8 +54,7 @@
 	(11 rows)
 
 
-
-------------------------初始化RemoteSubplan----------------------------------------------------------------------------------------------------------
+------------------------execute的过程中初始化RemoteSubplan----------------------------------------------------------------------------------------------------------
 【在CN1中】某一时刻函数栈的内容如下所示：
 #0  PoolManagerGetConnections (datanodelist=0x14e4f40, coordlist=0x0, pids=0x7fffe48e6d50) at poolmgr.c:1231
 #1  0x000000000073a40f in get_handles (datanodelist=0x14d3ad8, coordlist=0x0, is_coord_only_query=0 '\000', is_global_session=1 '\001') at pgxcnode.c:2371
@@ -57,7 +83,7 @@
 
 
 
-------------------------执行RemoteSubplan----------------------------------------------------------------------------------------------------------
+------------------------execute的过程中执行RemoteSubplan----------------------------------------------------------------------------------------------------------
 【在CN1中】某一时刻函数栈的内容如下所示：
 #0  ExecRemoteSubplan (pstate=0x1d20688) at execRemote.c:5906
 #1  0x00000000006da0a7 in ExecProcNodeFirst (node=0x1d20688) at execProcnode.c:529
@@ -104,7 +130,7 @@ DN节点如同”client--server“模式中的server端，主要依据CN端发�
 
 
 
-------------------------分发RemoteSubplan----------------------------------------------------------------------------------------------------------
+------------------------execute的过程中分发RemoteSubplan----------------------------------------------------------------------------------------------------------
 将RemoteSubplan分发给其它进程或者node主要通过函数”pgxc_node_send_plan“实现。
 何时分发RemoteSubplan：
 	在进行RemoteSubplan初始化结束后分发，即执行函数”ExecFinishInitRemoteSubplan“过程中调用”pgxc_node_send_plan“
