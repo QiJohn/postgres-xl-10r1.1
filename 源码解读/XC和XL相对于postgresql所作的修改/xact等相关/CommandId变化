@@ -1,0 +1,48 @@
+Command ID是什么?
+	Command ID是由Command Counter进行递增的用于计数的值，初始值为0，最大为2^32-2。
+	一般而言，语句不会看见它们修改的行。这使得UPDATE命令的SET x = x + 1正确地工作。	然而，有些情形下，一个事务需要查看该事务之前的部分对行所做出的影响。这是通过使用Command Counter来完成的。Command Counter对事务进行分片，每处理完一片Command ID的值进行加1。这种对计数器值的递增使得事务被分解为多片，每一片可以看出之前的片对行做出的修改。CommandCounterIncrement()将递增Command ID，并且创建出一个事务的新片段。
+
+
+在XL中：
+	对Command ID进行自增处理，调用函数CommandCounterIncrement(void)的过程中，会调用函数”ReportCommandIdChange(currentCommandId)“将最新的Command ID发送给CN
+
+
+示例如下所示：
+================准备工作如下===============
+	构建XL节点，两个CN、两个DN
+
+	创建表语句
+		create table t1 (col1 int, col2 int) distribute by hash(col1);
+		create table t2 (col3 int, col4 int) distribute by hash(col3);
+
+	插入数据语句
+		INSERT INTO t1(col1, col2) select n,floor(random()*100)+1 from generate_series(1,10) n;
+		INSERT INTO t2(col3, col4) select n,floor(random()*100)+1 from generate_series(1,10) n;
+
+
+===============测试如下===================
+使用psql连接CN1，输入sql语句”select * from t1 inner join t2 on col1 = col3“
+	在CN1中，currentCommandId一直为0，保持不变；
+	在DN1中，收到来自CN1的”SET.......“信息时，currentCommandId会从0开始进行自增到1结束；在DN1值，收到来自CN1的snapshotdata数据后，currentCommandId会从0开始进行自增到1结束；在DN1收到来自CN1的”RESET ALL;RESET.......“信息后，currentCommandId会从0开始进行自增到2结束
+
+
+使用psql连接CN1，输入sql语句”insert into t2(col3, col4) values(12,20)“
+	在CN1中，currentCommandId一直为0，保持不变；
+	在DN1中，收到来自CN1的”SET.......“信息时，currentCommandId会从0开始进行自增到1结束；在DN1收到”Insert into......“信息时，currentCommandId保持不变；在DN1收到来自CN1的”RESET ALL;RESET.......“信息后，currentCommandId会从0开始进行自增到2结束
+
+
+使用psql连接CN1，输入sql语句”update t2 set col4=col4+1“
+	在CN1中，currentCommandId一直为0，保持不变；
+	在DN1中，收到来自CN1的”SET.......“信息时，currentCommandId会从0开始进行自增到1结束；在DN1收到”update t2 set col4=col4+1“信息时，currentCommandId会从0开始进行自增到2结束；在DN1收到来自CN1的”RESET ALL;RESET.......“信息后，currentCommandId会从0开始进行自增到2结束
+
+
+
+
+
+
+
+
+
+
+
+
