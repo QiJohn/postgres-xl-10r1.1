@@ -16,3 +16,12 @@
 3、== == == == == = gdb调试过程中执行函数
 	例如：调试过程中使用函数”list_length“计算”node->nodeList“的长度，可以直接使用”print list_length(node->nodeList)“
 
+
+4、== == == == == = perf进行性能分析
+	安装perf：yum  install  perf
+	对进程号xxxx进行函数运行监控：perf record -e cpu-clock -g -p xxxxx
+	展示监控的信息：perf report
+
+
+
+
