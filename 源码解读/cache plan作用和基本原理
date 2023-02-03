@@ -1,0 +1,84 @@
+对与cache plan的相关定义在文件”src/backend/utils/cache/plancache.c“、”src/include/utils/plancache.h“中
+	cache plan用于对执行计划进行缓存，在Prepare.....Execute语法、直接执行的utility语句、XL中执行远程计划树时使用。都需要先缓存执行计划树，再进行调用。
+
+CachedPlanSource (which might better have been called CachedQuery) represents a SQL query that we expect to use multiple times.  It stores the query source text, the raw parse tree, and the analyzed-and-rewritten query tree, as well as adjunct data.  Cache invalidation can happen as a result of DDL affecting objects used by the query.  In that case we discard the analyzed-and-rewritten query tree, and rebuild it when next needed.
+
+ An actual execution plan, represented by CachedPlan, is derived from the CachedPlanSource when we need to execute the query.  The plan could be either generic (usable with any set of plan parameters) or custom (for a specific set of parameters).  plancache.c contains the logic that decides which way to do it for any particular execution.  If we are using a generic cached plan then it is meant to be re-used across multiple executions, so callers must always treat CachedPlans as read-only.
+
+ CachedPlan represents an execution plan derived from a CachedPlanSource. The reference count includes both the link from the parent CachedPlanSource (if any), and any active plan executions, so the plan can be discarded exactly when refcount goes to zero.  Both the struct itself and the subsidiary data live in the context denoted by the context field. This makes it easy to free a no-longer-needed cached plan.  (However, if is_oneshot is true, the context does not belong solely to the CachedPlan so no freeing is possible.)
+
+
+调用函数”CreateCachedPlan“创建cache plan时返回结构体类型”CachedPlanSource“；调用函数”GetCachedPlan“获取cache plan时返回结构体类型”CachedPlan“，即从结构体”CachedPlanSource“中提取结构体”CachedPlan“相关的数据。
+
+结构体”CachedPlanSource“中包含原始的SQL语句、经过analyze和rewrit的Query、经过parse得到的RawStmt。
+结构体”CachedPlan“则包含PlannedStmts。
+
+
+
+
+==================================================使用流程===================================================
+以：Prepare.....Execute语法为例
+Prepare语句会被解析成PrepareStmt结构体，该语句接着被PrepareQuery()函数处理：
+	case T_PrepareStmt:
+		CheckRestrictedOperation("PREPARE");
+		PrepareQuery((PrepareStmt *) parsetree, queryString, pstmt->stmt_location, pstmt->stmt_len);
+		break;
+
+	void PrepareQuery(PrepareStmt *stmt, const char *queryString, int stmt_location, int stmt_len){
+		// 第一步：检查stmt->name
+
+		// 第二步：Create the CachedPlanSource before we do parse analysis, since it needs to see the unmodified raw parse tree.
+		plansource = CreateCachedPlan(rawstmt, queryString, CreateCommandTag(stmt->query));
+
+		// 第三步：Transform list of TypeNames to array of type OIDs */
+
+		// 第四步：生成Query节点
+		query = parse_analyze_varparams(rawstmt, queryString, &argtypes, &nargs);
+
+		// 第五步：检查参数类型和语法类型
+
+		// 第六步：Rewrite the query. The result could be 0, 1, or many queries. */
+		query_list = QueryRewrite(query);
+
+		// 第七步：Finish filling in the CachedPlanSource */
+		CompleteCachedPlan(plansource, query_list, NULL, argtypes, nargs, NULL, NULL, CURSOR_OPT_PARALLEL_OK, true);
+
+		// 第八步：Save the results.
+		StorePreparedStatement(stmt->name, plansource, true);
+	}
+
+
+
+Execute语句会被解析成ExecuteStmt结构体，该语句接着被ExecuteQuery()函数处理：
+	case T_ExecuteStmt:
+		ExecuteQuery((ExecuteStmt *) parsetree, NULL, queryString, params, dest, completionTag);
+		break;
+
+	void ExecuteQuery(ExecuteStmt *stmt, IntoClause *intoClause,
+				const char *queryString, ParamListInfo params,
+				DestReceiver *dest, char *completionTag)
+	{
+	...
+		// 第一步：Look it up in the hash table
+		entry = FetchPreparedStatement(stmt->name, true);
+
+		// 第二步：检查。Shouldn't find a non-fixed-result cached plan；Evaluate parameters, if any
+
+		// 第三步：Create a new portal to run the query in
+		portal = CreateNewPortal();
+
+		// 第四步：得到执行计划。Replan if needed, and increment plan refcount for portal */
+		cplan = GetCachedPlan(entry->plansource, paramLI, false, NULL);
+
+		// ... 根据Plan进行执行
+		PortalDefineQuery(portal, NULL, query_string, entry->plansource->commandTag, plan_list, cplan);
+		PortalStart(portal, paramLI, eflags, GetActiveSnapshot());
+		(void) PortalRun(portal, count, false, true, dest, dest, completionTag);
+		PortalDrop(portal, false);
+	...
+	}
+
+
+
+
+
