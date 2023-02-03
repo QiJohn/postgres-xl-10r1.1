@@ -1,0 +1,70 @@
+============================================结构体转换总体流程=================================================
+阶段一系列流程：一个或多个SQL语句---->结构体RawStmt组成的list
+	该阶段为parse阶段，通过函数”pg_parse_query“实现
+
+阶段二系列流程：结构体RawStmt---->结构体Query---->结构体Query组成的list---->结构体PlannedStmt组成的list
+	1、”结构体RawStmt---->结构体Query“为analyze阶段，通过函数”parse_analyze“实现。
+			在该函数中调用”make_parsestate“构建结构体ParseState的变量，用于存储analyze阶段的状态信息
+	2、”结构体Query---->结构体Query组成的list“为rewrite阶段，通过函数”pg_rewrite_query“实现。
+	3、”结构体Query组成的list---->结构体PlannedStmt组成的list“为optimizer阶段，通过函数”pg_plan_queries“实现；在该流程中，需要遍历”结构体Query组成的list“，并将每个”Query“转换成一个结4、构体”PlannedStmt“，通过函数”pg_plan_query-->planner-->standard_planner“实现，详细实现在函数”standard_planner“中。
+
+阶段三系列流程：结构体PlannedStmt组成的list---->结构体Portal
+	1、先构建一个空的Portal，通过函数“CreatePortal("", true, true)”完成
+	2、通过PlannedStmt对Portal进行初始化，通过函数“PortalDefineQuery”完成
+
+
+
+
+
+
+
+
+
+=================================单个结构体”Query“转换成单个结构体”PlannedStmt“的总流程===================================
+即：standard_planner中结构体转换流程
+	流程一：结构体“Query”---->结构体“PlannerInfo”
+	流程二：从结构体“PlannerInfo”获取结构体“RelOptInfo”
+	流程三：从结构体“RelOptInfo”获取结构体“Path”
+	流程四：结构体“Path”---->结构体“Plan”
+	流程五：将结构体“Plan”赋值给结构体“PlannedStmt”的成员变量“planTree”
+
+其中：
+	“流程一”通过函数“subquery_planner”实现，在该阶段构建path、RelOptInfo，并进一步包装成PlannerInfo
+		1、在函数“subquery_planner”中先通过“makeNode(PlannerInfo)”创建“PlannerInfo”
+		2、通过”grouping_planner-->query_planner"来调用函数”make_one_rel“创建“RelOptInfo”
+		3、在后续流程中通过“fetch_upper_rel”从结构体“PlannerInfo”的“upper_rels”(upper_rels不存在就先构建)中获取“RelOptInfo”，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
+			或，构建join类型“RelOptInfo”，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
+			或，从结构体“PlannerInfo“的“simple_rel_array”获取”RelOptInfo“，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
+
+	“流程二”通过函数“fetch_upper_rel”实现，即从结构体“PlannerInfo”的成员变量”upper_rels“中，获取结构体“RelOptInfo”的具体内容，如果“upper_rels”为空，则先构建再返回
+
+	“流程三”通过函数“get_cheapest_fractional_path”实现，即从结构体“RelOptInfo”的成员变量”pathlist“中，获取结构体”Path“的具体内容。path组成的tree
+		实际数据举例，best_path地址为0x2139530
+		按照”Path *“类型查看best_path内容为：{type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000', parallel_safe = 1 '\001',	parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}
+		按照”MergePath *“类型查看best_path内容为：{jpath = {path = {type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000',	parallel_safe = 1 '\001', parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}, jointype = JOIN_INNER, inner_unique = 0 '\000', outerjoinpath = 0x21396e0, innerjoinpath = 0x2138560, joinrestrictinfo = 0x2139128, movedrestrictinfo = 0x0}, path_mergeclauses = 0x21393e0, outersortkeys = 0x0, innersortkeys = 0x2139440, skip_mark_restore = 0 '\000', materialize_inner = 0 '\000'}
+		按照”JoinPath *“类型查看best_path内容为：{path = {type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000', parallel_safe = 1 '\001',	parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}, jointype = JOIN_INNER,	inner_unique = 0 '\000', outerjoinpath = 0x21396e0, innerjoinpath = 0x2138560, joinrestrictinfo = 0x2139128, movedrestrictinfo = 0x0}
+
+	“流程四”通过函数“create_plan”实现（在结构体plan组成的tree上添加新的结构体plan，通过makex_xxxxplan函数实现）。plan组成的tree，及plantree_list。
+
+
+
+==========================================结构体之间关系======================================================
+结构体”PlannerInfo“的成员变量”parse“为指针，指向结构体”Query“
+结构体”PlannerInfo“的成员变量”upper_rels“为List指针数组，数组中存储为结构体”ListCell“，通过该结构体内指针变量指向结构体”RelOptInfo“
+结构体”RelOptInfo“的成员变量”cheapest_total_path“为指针，指向结构体”Path“；”pathlist“为List指针，记录着生成该RelOptInfo时在某方面较优的路径，其中每个元素最终指向结构体Path
+
+
+
+
+
+
+==========================================Path构建流程=======================================================
+流程一：构建基本关系的路径（即为每个基本关系的RelOptInfo结构生成路径）
+	由函数“set_base_rel_pathlists(PlannerInfo *root)”实现。在函数中，通过遍历存储在数组“PlannerInfo->simple_rel_array”中的基本关系对应的RelOptInfo结构，为其生成路径，以及将路径存储到每个RelOptInfo结构的pathlist字段中
+
+流程二：对基本关系的路径进行连接(Join操作)，从而生成最终的路径
+	由函数“make_rel_from_joinlist(PlannerInfo *root, List *joinlist)”实现。在函数中，“joinlist”中每一个节点都代表一个基本关系(RangeTblRef)，该函数获取每一个基本关系(RangeTblRef)对应的RelOptInfo，将这些RelOptInfo存储到一个list链表中，并调用动态规划算法生成包含最终路径的RelOptInfo结构，其中RelOptInfo的pathlist字段就是最终路径组成的链表
+
+
+
+
