@@ -213,3 +213,25 @@ Since we ensure that all partitions of a partitioned table are always distribute
 调用”create_unique_path“的函数有：sort_inner_and_outer、match_unsorted_outer、consider_parallel_nestloop、hash_inner_and_outer、join_is_legal、populate_joinrel_with_paths
 
 
+
+=================总结：何种情况下需要在当前path基础上增加”T_RemoteSubPath“================
+第一类：通过函数”create_remotesubplan_path“增加”T_RemoteSubPath“
+	1、针对当前path，处理的语句为LIMIT或者OFFSET，且”path->distribution“为真
+	2、针对当前path，can_push_down_grouping(root, parse, path)为假
+	3、涉及排序时，query中存在聚合（即query中”hasAggs“为真），在”create_agg_path“后增加”T_RemoteSubPath“
+	4、存在”GROUP BY“语句且不存在聚合或者”grouping sets“，在”create_group_path“后增加”T_RemoteSubPath“
+	5、针对”AGG_HASHED aggregate path“，在”create_sort_path“后增加”T_RemoteSubPath“
+	6、针对当前path，can_push_down_window(root, path)为假
+	7、针对当前path，grouping_distribution_match(root, parse, path, parse->distinctClause))为假
+	8、针对当前path，if (!(IsA(path, ResultPath) && ((root->distribution->distributionType == 'H' && bms_num_members(root->distribution->restrictNodes) == 1) ||
+			 (root->distribution->distributionType == 'R' && !contain_mutable_functions((Node *)parse->targetList)))))
+
+
+第二类：通过函数”redistribute_path“增加”T_RemoteSubPath“
+	1、在函数”set_joinpath_distribution“中，构造JoinPath时，调用函数”redistribute_path“，增加”T_RemoteSubPath“
+	2、在函数”create_append_path“中，遍历path组成的list链表，针对存在distribution的每个path都调用函数”redistribute_path“，增加”T_RemoteSubPath“
+	3、在函数”create_merge_append_path“中，遍历path组成的list链表，针对存在distribution的每个path都调用函数”redistribute_path“，增加”T_RemoteSubPath“
+
+
+
+
