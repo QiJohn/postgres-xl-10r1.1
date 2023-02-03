@@ -1,0 +1,468 @@
+postgresql的query协议分为两类：简单查询协议、扩展查询协议
+    简单查询和扩展查询是PG前端和后端交互的时候，2种不同交互方法。简单查询时，前端发一个包含SQL的包过去，后端执行后返回结果。扩展查询则是把简单查询切分Parse,Bind,Describe,Execute,Close等几个步骤，以达到执行计划复用的目的。扩展查询还有防止SQL注入，减少通信数据量（使用binary形式传参）的效果。
+
+1、postgresql数据库网络协议
+     PostgreSQL数据库网络协议中，客户端和服务器间的所有通信都是以消息为载体的。消息的第一个字节表示消息类型，其后 4 个字节用于表示除消息类型外消息剩余部分（包括长度自身）的长度（字节数），其余部分为消息内容，由具体的消息类型决定。由于历史原因，客户端发送的最初消息（启动消息）不包含消息类型字节。参考消息格式定义http://postgres.cn/docs/12/protocol-message-formats.html
+
+
+2、简单查询协议
+    顾名思义简单查询就是简单的把SQL语句发送给Backend进程，Backend进程也只是简单的执行该SQL语句并把结果返回给clients。
+
+	Client端发送“简单查询消息”的函数为：
+		pgxc_node_send_query(PGXCNodeHandle *handle, const char *query)
+			->pgxc_node_send_query_internal(handle, query, false);
+	【debug打印函数pgxc_node_send_query的调用情况如下所示】
+		#0  pgxc_node_send_query (handle=0x280cea8, query=0x274e6a0 "SET LOCAL coordinator_lxid TO \"30\";") at pgxcnode.c:1827
+		#1  0x0000000000739cb5 in pgxc_node_set_query (handle=0x280cea8, set_query=0x274e6a0 "SET LOCAL coordinator_lxid TO \"30\";") at pgxcnode.c:2869
+		#2  0x000000000073e8cd in pgxc_node_begin (conn_count=1, connections=0x7fff7aa65d98, gxid=662156, need_tran_block=1 '\001', readOnly=1 '\001', node_type=68 'D')
+			at execRemote.c:1968
+		#3  0x0000000000745df1 in ExecFinishInitRemoteSubplan (node=0x2842500) at execRemote.c:5743
+		#4  0x0000000000745a38 in ExecInitRemoteSubplan (node=0x275a550, estate=0x2841880, eflags=0) at execRemote.c:5637
+		#5  0x00000000006d967f in ExecInitNode (node=0x275a550, estate=0x2841880, eflags=0) at execProcnode.c:378
+		#6  0x00000000007009d8 in ExecInitModifyTable (node=0x275a3d8, estate=0x2841880, eflags=0) at nodeModifyTable.c:1916
+		#7  0x00000000006d91eb in ExecInitNode (node=0x275a3d8, estate=0x2841880, eflags=0) at execProcnode.c:177
+		#8  0x00000000006d3513 in InitPlan (queryDesc=0x275afb0, eflags=0) at execMain.c:1103
+		#9  0x00000000006d2323 in standard_ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:312
+		#10 0x00000000006d1f88 in ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:162
+		#11 0x00000000008e095a in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:174
+		#12 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#13 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#14 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#15 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#16 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#17 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#18 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#19 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#20 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+
+	Backend进程端对于“简单查询消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'Q':            /* simple query */
+				....
+				exec_simple_query(const char *query_string)
+				->parsetree_list = pg_parse_query(query_string);
+				->foreach(parsetree_item, parsetree_list)
+				->querytree_list = pg_analyze_and_rewrite(parsetree, query_string,NULL, 0);
+				->plantree_list = pg_plan_queries(querytree_list, 0, NULL);
+				->portal = CreatePortal("", true, true);
+				->PortalDefineQuery(portal,NULL,query_string,commandTag,plantree_list,NULL);
+				->PortalStart(portal, NULL, 0, InvalidSnapshot);
+				->PortalRun(portal,FETCH_ALL,isTopLevel,receiver,receiver,completionTag);
+				->PortalDrop(portal, false);
+
+3、扩展查询协议
+    扩展查询可以理解为将简单查询拆分为几个步骤，涉及的步骤有Parse、Bind、Describe、Execute、Close、sysnc消息处理；同时postgres-xl还有其特定的消息处理，例如：plan、gxid、commandId、snapshot、timestamp。
+
+3.1、Parse消息的处理---不能包含多个SQL语句
+	作用：指定SQL语句，可能包含类似($1, $2, $3,....)这种参数，构建返回的“prepared statement”【解释一下prepared-statement：需求是用户有一条 A 语句，需要被反复执行，数据库为这类语句设置了对应的捷径(prepared-statement)，避免了反复执行类似语句造成的资源浪费】
+	* P 消息采用通用查询字符串，其中数据值替换为 $1、$2 等占位符，稍后可以在“bind消息”中用实际值替换。
+	* 此通用查询字符串将通过以下查询处理例程进行解析：Parser(解析器) -> Analyzer(分析器) -> Rewriter(重写器)
+	* 在Parse消息成功处理结束时，会生成一个“prepared statement”语句，类似于 SQL 的 PREPARE 子句
+	* 这个“prepared statement”可以是已命名或不命名
+	* 这个“prepared statement”只是输入query的表示，它还不能被执行。
+
+	Client端发送“Parse消息”的函数为：
+		pgxc_node_send_parse(PGXCNodeHandle * handle, const char* statement,
+						const char *query, short num_params, Oid *param_types)
+
+	Backend进程端对于“Parse消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'P':            /* parse */
+				....
+				exec_parse_message(const char *query_string,const char *stmt_name,Oid *paramTypes,int numParams)
+				->parsetree_list = pg_parse_query(query_string);
+				->raw_parse_tree = (Node *) linitial(parsetree_list);
+				->psrc = CreateCachedPlan(raw_parse_tree, query_string, stmt_name, commandTag);
+				->query = parse_analyze_varparams(raw_parse_tree,query_string,&paramTypes,&numParams);
+				->querytree_list = pg_rewrite_query(query);
+				->CompleteCachedPlan(psrc,querytree_list,unnamed_stmt_context,paramTypes,numParams,NULL,NULL,0,true);
+				->StorePreparedStatement(stmt_name, psrc, false);
+
+3.2、bind消息的处理
+	作用：指定“prepared statement”的名字，填入变量的具体参数值
+	* “bind”会获取从 “Parse消息的处理”中生成的已命名或未命名的“prepared statement”，并将占位符 ($1, $2) 替换为用户提供的值。
+	* 在将值绑定到“prepared statement”之后，我们基本上就有了一个完整的查询计划，然后它将被送入Planner(计划器)阶段，为查询生成最优化的查询计划。
+	* 在planning成功后，会生成一个可执行的“portal”。
+	* 此“portal”也可以命名或不命名
+	* “portal”是一个基本的对象，该对象表示如何执行特定query
+
+	Client端发送“Bind消息”的函数为：
+		pgxc_node_send_bind(PGXCNodeHandle * handle, const char *portal,
+						const char *statement, int paramlen, char *params)
+	【debug打印函数pgxc_node_send_bind的调用情况如下所示】
+		#0  pgxc_node_send_bind (handle=0x280cea8, portal=0x7fff7aa66160 "p_1_50bb_1", statement=0x7fff7aa66160 "p_1_50bb_1", paramlen=2, params=0x2860d98 "") at pgxcnode.c:1437
+		#1  0x0000000000746aa8 in ExecRemoteSubplan (pstate=0x2842500) at execRemote.c:6079
+		#2  0x00000000006d99bb in ExecProcNodeFirst (node=0x2842500) at execProcnode.c:529
+		#3  0x00000000006fdbfd in ExecProcNode (node=0x2842500) at ../../../src/include/executor/executor.h:263
+		#4  0x00000000007000db in ExecModifyTable (pstate=0x2842208) at nodeModifyTable.c:1644
+		#5  0x00000000006d99bb in ExecProcNodeFirst (node=0x2842208) at execProcnode.c:529
+		#6  0x00000000006d1e58 in ExecProcNode (node=0x2842208) at ../../../src/include/executor/executor.h:263
+		#7  0x00000000006d479c in ExecutePlan (estate=0x2841880, planstate=0x2842208, use_parallel_mode=0 '\000', operation=CMD_INSERT, sendTuples=0 '\000', numberTuples=0,
+			direction=ForwardScanDirection, dest=0xfbde60 <donothingDR>, execute_once=1 '\001') at execMain.c:1788
+		#8  0x00000000006d255a in standard_ExecutorRun (queryDesc=0x275afb0, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:411
+		#9  0x00000000006d2386 in ExecutorRun (queryDesc=0x275afb0, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:354
+		#10 0x00000000008e0975 in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:179
+		#11 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#12 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#13 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#14 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#15 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#16 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#17 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#18 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#19 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+	Backend进程端对于“Bind消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'B':            /* bind */
+				....
+				exec_bind_message(StringInfo input_message)
+				->portal_name = pq_getmsgstring(input_message);
+				->stmt_name = pq_getmsgstring(input_message);
+				->pstmt = FetchPreparedStatement(stmt_name, true);
+				->psrc = pstmt->plansource;
+				->cplan = GetCachedPlan(psrc, params, false);  //该函数会决定新创建一个定制的执行计划还是使用之前保存的通用的执行计划
+				->portal = CreatePortal(portal_name, true, true);
+				->PortalDefineQuery(portal,saved_stmt_name,query_string,psrc->commandTag,cplan->stmt_list,cplan);
+				->PortalStart(portal, params, 0, InvalidSnapshot);
+
+3.3、execute消息的处理
+	* “execute”从 "bind消息处理" 中获取命名或未命名的“portal”，并启动Executor(执行器)以执行query（或portal）。
+	* 生成结果行（如果有）并返回给客户端
+
+	Client端发送“Execute消息”的函数为：
+		pgxc_node_send_execute(PGXCNodeHandle * handle, const char *portal, int fetch)
+	【debug打印函数pgxc_node_send_execute的调用情况如下所示】
+		#0  pgxc_node_send_execute (handle=0x280cea8, portal=0x7fff7aa66160 "p_1_50bb_1", fetch=1000) at pgxcnode.c:1602
+		#1  0x0000000000746ac1 in ExecRemoteSubplan (pstate=0x2842500) at execRemote.c:6081
+		#2  0x00000000006d99bb in ExecProcNodeFirst (node=0x2842500) at execProcnode.c:529
+		#3  0x00000000006fdbfd in ExecProcNode (node=0x2842500) at ../../../src/include/executor/executor.h:263
+		#4  0x00000000007000db in ExecModifyTable (pstate=0x2842208) at nodeModifyTable.c:1644
+		#5  0x00000000006d99bb in ExecProcNodeFirst (node=0x2842208) at execProcnode.c:529
+		#6  0x00000000006d1e58 in ExecProcNode (node=0x2842208) at ../../../src/include/executor/executor.h:263
+		#7  0x00000000006d479c in ExecutePlan (estate=0x2841880, planstate=0x2842208, use_parallel_mode=0 '\000', operation=CMD_INSERT, sendTuples=0 '\000', numberTuples=0,
+			direction=ForwardScanDirection, dest=0xfbde60 <donothingDR>, execute_once=1 '\001') at execMain.c:1788
+		#8  0x00000000006d255a in standard_ExecutorRun (queryDesc=0x275afb0, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:411
+		#9  0x00000000006d2386 in ExecutorRun (queryDesc=0x275afb0, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:354
+		#10 0x00000000008e0975 in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:179
+		#11 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#12 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#13 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#14 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#15 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#16 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#17 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#18 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#19 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+	Backend进程端对于“Execute消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'E':            /* execute */
+				....
+				exec_execute_message(const char *portal_name, long max_rows)
+				->portal = GetPortalByName(portal_name);
+				->completed = PortalRun(portal,max_rows,true,receiver,receiver,completionTag);
+
+3.4、close消息的处理
+	作用：关闭现有的“prepared statement”或“portal”；即没有错误则提交，如果存在错误则回滚。
+
+	Client端发送“Close消息”的函数为：
+		pgxc_node_send_close(PGXCNodeHandle * handle, bool is_statement, const char *name)
+
+	Backend进程端对于“Close消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+		case 'C':            /* close */
+			....
+			->DropPreparedStatement(close_target, false);
+			or
+			->PortalDrop(portal, false);
+
+
+3.5、sync消息的处理
+	* 客户端必须向服务器发送 S 消息(即sync消息)以指示扩展查询的结束。同时为错误恢复提供重新同步点
+	* 此消息导致服务器结束当前事务并将 ReadyForQuery(IDLE) 消息发送回客户端。
+
+	Client端发送“sync消息”的函数为：
+		pgxc_node_send_sync(PGXCNodeHandle * handle)
+
+	Backend进程端对于“sync消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'S':            /* sync */
+				pq_getmsgend(&input_message);
+				finish_xact_command();
+				send_ready_for_query = true;
+				break;
+
+
+3.6、Describe消息的处理
+	作用： 指定现有“prepared statement”的名称（或未命名的“prepared statement”的空字符串）
+	返回的响应是描述语句所需参数的 ParameterDescription 消息，然后是描述语句最终执行时将返回的行的 RowDescription 消息（如果语句不返回行，则为 NoData 消息）。如果没有这样的准备好的语句，则会发出 ErrorResponse。请注意，由于尚未发布 Bind，因此后端尚不知道要用于返回列的格式；在这种情况下，RowDescription 消息中的格式代码字段将为零。
+
+	Client端发送“Describe消息”的函数为：
+		pgxc_node_send_describe(PGXCNodeHandle * handle, bool is_statement, const char *name)
+
+	Backend进程端对于“Describe消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'D':            /* describe */
+				....
+				->exec_describe_portal_message(describe_target);
+				or
+				->exec_describe_statement_message(const char *stmt_name)
+					->start_xact_command();
+					->pstmt = FetchPreparedStatement(stmt_name, true);
+					->pq_beginmessage(&buf, 't');
+					->pq_sendint(&buf, psrc->num_params, 2);
+					->pq_endmessage(&buf);
+					->tlist = CachedPlanGetTargetList(psrc, NULL); SendRowDescriptionMessage(psrc->resultDesc, tlist, NULL);
+					or
+					->pq_putemptymessage('n');   //NoData
+
+
+3.7、Flush消息的处理
+	作用： 强制后端交付其输出缓冲区中未决的任何数据， 如果没有 Flush，后端返回的消息将被组合成尽可能少的数据包，以最大限度地减少网络开销。
+
+	Client端发送“Flush消息”的函数为：
+		pgxc_node_send_flush(PGXCNodeHandle * handle)
+
+
+	Backend进程端对于“Flush消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'H':            /* flush */
+				pq_getmsgend(&input_message);
+				if (whereToSendOutput == DestRemote)
+					pq_flush();
+				break;
+
+
+3.7、plan消息的处理
+	Client端发送“plan消息”的函数为：
+		pgxc_node_send_plan(PGXCNodeHandle * handle, const char *statement, const char *query,
+							const char *planstr, short num_params, Oid *param_types)
+	【debug打印函数pgxc_node_send_plan的调用情况如下所示】
+		#0  pgxc_node_send_plan (handle=0x280cea8, statement=0x7fff7aa65da0 "p_1_50bb_1", query=0xc42738 "Remote Subplan",
+			planstr=0x285c930 "{REMOTESTMT :commandType 1 :hasReturning false :parallelModeNeeded false :planTree {SUBQUERYSCAN :startup_cost 0.00 :total_cost 67.50 :plan_rows 1000
+		:plan_width 140 :parallel_aware false :parallel_sa"..., num_params=0, param_types=0x0) at pgxcnode.c:1353
+		#1  0x0000000000746041 in ExecFinishInitRemoteSubplan (node=0x2842500) at execRemote.c:5773
+		#2  0x0000000000745a38 in ExecInitRemoteSubplan (node=0x275a550, estate=0x2841880, eflags=0) at execRemote.c:5637
+		#3  0x00000000006d967f in ExecInitNode (node=0x275a550, estate=0x2841880, eflags=0) at execProcnode.c:378
+		#4  0x00000000007009d8 in ExecInitModifyTable (node=0x275a3d8, estate=0x2841880, eflags=0) at nodeModifyTable.c:1916
+		#5  0x00000000006d91eb in ExecInitNode (node=0x275a3d8, estate=0x2841880, eflags=0) at execProcnode.c:177
+		#6  0x00000000006d3513 in InitPlan (queryDesc=0x275afb0, eflags=0) at execMain.c:1103
+		#7  0x00000000006d2323 in standard_ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:312
+		#8  0x00000000006d1f88 in ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:162
+		#9  0x00000000008e095a in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:174
+		#10 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#11 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#12 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#13 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#14 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#15 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#16 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#17 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#18 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+	Backend进程端对于“plan消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'p':            /* plan */
+				SetCurrentStatementStartTimestamp();
+				stmt_name = pq_getmsgstring(&input_message);
+				query_string = pq_getmsgstring(&input_message);
+				plan_string = pq_getmsgstring(&input_message);
+				numParams = pq_getmsgint(&input_message, 2);
+				exec_plan_message(query_string, stmt_name, plan_string, paramTypes, numParams);
+				break;
+
+
+3.8、gxid消息的处理
+	Client端发送“gxid消息”的函数为：
+		pgxc_node_send_gxid(PGXCNodeHandle *handle, GlobalTransactionId gxid)
+	【debug打印函数pgxc_node_send_gxid的调用情况如下所示】
+		#0  pgxc_node_send_gxid (handle=0x280cea8, gxid=662156) at pgxcnode.c:1837
+		#1  0x000000000073e645 in pgxc_node_begin (conn_count=1, connections=0x7fff7aa65d98, gxid=662156, need_tran_block=1 '\001', readOnly=1 '\001', node_type=68 'D')
+			at execRemote.c:1912
+		#2  0x0000000000745df1 in ExecFinishInitRemoteSubplan (node=0x2842500) at execRemote.c:5743
+		#3  0x0000000000745a38 in ExecInitRemoteSubplan (node=0x275a550, estate=0x2841880, eflags=0) at execRemote.c:5637
+		#4  0x00000000006d967f in ExecInitNode (node=0x275a550, estate=0x2841880, eflags=0) at execProcnode.c:378
+		#5  0x00000000007009d8 in ExecInitModifyTable (node=0x275a3d8, estate=0x2841880, eflags=0) at nodeModifyTable.c:1916
+		#6  0x00000000006d91eb in ExecInitNode (node=0x275a3d8, estate=0x2841880, eflags=0) at execProcnode.c:177
+		#7  0x00000000006d3513 in InitPlan (queryDesc=0x275afb0, eflags=0) at execMain.c:1103
+		#8  0x00000000006d2323 in standard_ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:312
+		#9  0x00000000006d1f88 in ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:162
+		#10 0x00000000008e095a in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:174
+		#11 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#12 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#13 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#14 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#15 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#16 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#17 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#18 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#19 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+
+	Backend进程端对于“gxid消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'g':            /* gxid */
+				TransactionId gxid;
+				memcpy(&gxid, pq_getmsgbytes(&input_message, sizeof (TransactionId)), sizeof (TransactionId));
+				SetNextTransactionId(gxid);
+				pq_getmsgend(&input_message);
+				break;
+
+
+3.9、commandID消息的处理
+	Client端发送“commandID消息”的函数为：
+		pgxc_node_send_cmd_id(PGXCNodeHandle *handle, CommandId cid)
+	【debug打印函数pgxc_node_send_cmd_id的调用情况如下所示】
+		#0  pgxc_node_send_cmd_id (handle=0x280cea8, cid=1) at pgxcnode.c:1868
+		#1  0x0000000000745f85 in ExecFinishInitRemoteSubplan (node=0x2842500) at execRemote.c:5765
+		#2  0x0000000000745a38 in ExecInitRemoteSubplan (node=0x275a550, estate=0x2841880, eflags=0) at execRemote.c:5637
+		#3  0x00000000006d967f in ExecInitNode (node=0x275a550, estate=0x2841880, eflags=0) at execProcnode.c:378
+		#4  0x00000000007009d8 in ExecInitModifyTable (node=0x275a3d8, estate=0x2841880, eflags=0) at nodeModifyTable.c:1916
+		#5  0x00000000006d91eb in ExecInitNode (node=0x275a3d8, estate=0x2841880, eflags=0) at execProcnode.c:177
+		#6  0x00000000006d3513 in InitPlan (queryDesc=0x275afb0, eflags=0) at execMain.c:1103
+		#7  0x00000000006d2323 in standard_ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:312
+		#8  0x00000000006d1f88 in ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:162
+		#9  0x00000000008e095a in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:174
+		#10 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#11 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#12 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#13 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#14 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#15 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#16 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#17 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#18 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+
+	Backend进程端对于“commandID消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 'M':            /* Command ID */
+				CommandId cid = (CommandId) pq_getmsgint(&input_message, 4);
+				SaveReceivedCommandId(cid);
+				break;
+
+
+3.10、snapshot消息的处理
+	Client端发送“snapshot消息”的函数为：
+		pgxc_node_send_snapshot(PGXCNodeHandle *handle, Snapshot snapshot)
+	【debug打印函数pgxc_node_send_snapshot的调用情况如下所示】
+		#0  pgxc_node_send_snapshot (handle=0x280cea8, snapshot=0x274e500) at pgxcnode.c:1909
+		#1  0x0000000000746a0b in ExecRemoteSubplan (pstate=0x2842500) at execRemote.c:6069
+		#2  0x00000000006d99bb in ExecProcNodeFirst (node=0x2842500) at execProcnode.c:529
+		#3  0x00000000006fdbfd in ExecProcNode (node=0x2842500) at ../../../src/include/executor/executor.h:263
+		#4  0x00000000007000db in ExecModifyTable (pstate=0x2842208) at nodeModifyTable.c:1644
+		#5  0x00000000006d99bb in ExecProcNodeFirst (node=0x2842208) at execProcnode.c:529
+		#6  0x00000000006d1e58 in ExecProcNode (node=0x2842208) at ../../../src/include/executor/executor.h:263
+		#7  0x00000000006d479c in ExecutePlan (estate=0x2841880, planstate=0x2842208, use_parallel_mode=0 '\000', operation=CMD_INSERT, sendTuples=0 '\000', numberTuples=0,
+			direction=ForwardScanDirection, dest=0xfbde60 <donothingDR>, execute_once=1 '\001') at execMain.c:1788
+		#8  0x00000000006d255a in standard_ExecutorRun (queryDesc=0x275afb0, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:411
+		#9  0x00000000006d2386 in ExecutorRun (queryDesc=0x275afb0, direction=ForwardScanDirection, count=0, execute_once=1 '\001') at execMain.c:354
+		#10 0x00000000008e0975 in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:179
+		#11 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#12 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#13 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#14 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#15 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#16 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#17 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#18 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#19 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+
+	Backend进程端对于“snapshot消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 's':            /* snapshot */
+				.....
+				SetGlobalSnapshotData(xmin, xmax, xcnt, xip, SNAPSHOT_COORDINATOR);
+				break;
+
+
+
+3.11、timestamp消息的处理
+	Client端发送“timestamp消息”的函数为：
+		pgxc_node_send_timestamp(PGXCNodeHandle *handle, TimestampTz timestamp)
+	【debug打印函数pgxc_node_send_timestamp的调用情况如下所示】
+		#0  pgxc_node_send_timestamp (handle=0x280cea8, timestamp=715681822451549) at pgxcnode.c:1959
+		#1  0x000000000073e683 in pgxc_node_begin (conn_count=1, connections=0x7fff7aa65d98, gxid=662156, need_tran_block=1 '\001', readOnly=1 '\001', node_type=68 'D')
+			at execRemote.c:1916
+		#2  0x0000000000745df1 in ExecFinishInitRemoteSubplan (node=0x2842500) at execRemote.c:5743
+		#3  0x0000000000745a38 in ExecInitRemoteSubplan (node=0x275a550, estate=0x2841880, eflags=0) at execRemote.c:5637
+		#4  0x00000000006d967f in ExecInitNode (node=0x275a550, estate=0x2841880, eflags=0) at execProcnode.c:378
+		#5  0x00000000007009d8 in ExecInitModifyTable (node=0x275a3d8, estate=0x2841880, eflags=0) at nodeModifyTable.c:1916
+		#6  0x00000000006d91eb in ExecInitNode (node=0x275a3d8, estate=0x2841880, eflags=0) at execProcnode.c:177
+		#7  0x00000000006d3513 in InitPlan (queryDesc=0x275afb0, eflags=0) at execMain.c:1103
+		#8  0x00000000006d2323 in standard_ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:312
+		#9  0x00000000006d1f88 in ExecutorStart (queryDesc=0x275afb0, eflags=0) at execMain.c:162
+		#10 0x00000000008e095a in ProcessQuery (plan=0x284fe38, sourceText=0x275af60 "Remote Subplan", params=0x0, queryEnv=0x0, dest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:174
+		#11 0x00000000008e316f in PortalRunMulti (portal=0x27dc280, isTopLevel=1 '\001', setHoldSnapshot=0 '\000', dest=0xfbde60 <donothingDR>, altdest=0xfbde60 <donothingDR>,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1818
+		#12 0x00000000008e2161 in PortalRun (portal=0x27dc280, count=1000, isTopLevel=1 '\001', run_once=0 '\000', dest=0x27e15e8, altdest=0x27e15e8,
+			completionTag=0x7fff7aa66840 "") at pquery.c:1152
+		#13 0x00000000008dc741 in exec_execute_message (portal_name=0x27e11d0 "p_1_50bb_2", max_rows=1000) at postgres.c:2426
+		#14 0x00000000008df78d in PostgresMain (argc=1, argv=0x275d990, dbname=0x275d768 "postgres", username=0x2730da8 "zq") at postgres.c:4832
+		#15 0x000000000083f539 in BackendRun (port=0x2756870) at postmaster.c:4628
+		#16 0x000000000083ecc1 in BackendStartup (port=0x2756870) at postmaster.c:4300
+		#17 0x000000000083aeb8 in ServerLoop () at postmaster.c:1857
+		#18 0x000000000083a4f7 in PostmasterMain (argc=8, argv=0x272eb30) at postmaster.c:1465
+		#19 0x000000000075acb2 in main (argc=8, argv=0x272eb30) at main.c:228
+
+
+
+	Backend进程端对于“timestamp消息”的处理如下所示：
+		PostgresMain(int argc, char *argv[],const char *dbname,const char *username)
+			case 't':            /* timestamp */
+				timestamp = (TimestampTz) pq_getmsgint64(&input_message);
+				pq_getmsgend(&input_message);
+				SetCurrentGTMDeltaTimestamp(timestamp);
+				break;
+
+
+
+4、一个简单完整的扩展查询协议api示例
+	pgxc_node_send_query_extended(PGXCNodeHandle *handle, const char *query,
+								const char *statement, const char *portal,
+								int num_params, Oid *param_types,
+								int paramlen, char *params,
+								bool send_describe, int fetch_size)
+	{
+		/* NULL query indicates already prepared statement */
+		if (query)
+			if (pgxc_node_send_parse(handle, statement, query, num_params, param_types))
+				return EOF;
+		if (pgxc_node_send_bind(handle, portal, statement, paramlen, params))
+			return EOF;
+		if (send_describe)
+			if (pgxc_node_send_describe(handle, false, portal))
+				return EOF;
+		if (fetch_size >= 0)
+			if (pgxc_node_send_execute(handle, portal, fetch_size))
+				return EOF;
+		if (pgxc_node_send_flush(handle))
+			return EOF;
+
+		return 0;
+	}
