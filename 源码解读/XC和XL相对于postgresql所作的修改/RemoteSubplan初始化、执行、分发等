@@ -17,14 +17,32 @@
 
 		变量”plan“信息为：{type = T_RemoteSubplan, startup_cost = 258.50580974751887, total_cost = 293.5358097475189, plan_rows = 2260, plan_width = 8, parallel_aware = 0 '\000',  parallel_safe = 0 '\000', plan_node_id = 0, targetlist = 0x1811b50, qual = 0x0, lefttree = 0x1810998, righttree = 0x0, initPlan = 0x0, extParam = 0x0, allParam = 0x0}
 
-		其中变量”plan->lefttree“指向变量“subplan2”；变量”subplan2->lefttree“指向变量”subplan1“，这构成一个plan tree。
+		其中变量”plan->lefttree“指向变量“subplan2”；变量”subplan2->lefttree“指向变量”subplan1“，这构成一个plan tree的雏形，后期再赋值给结构体“PlannedStmt”的成员变量“planTree”。
+		变量“root”的数据结构类型为“PlannerInfo”，在函数“subquery_planner”中通过“makeNode(PlannerInfo)”进行创建，这个结构体是查询优化的上下文信息，它贯穿在整个查询优化的过程之中。
+
+
+【哪些情况下需要构建remotesubplan】
+	总结：在构建plan时，存在distribution就需要构建remotesubplan
+	1、针对“With.....As”语句
+		在处理由“With.....As”语句构建的CTE链表，涉及的函数“SS_process_ctes”中会调用“make_remotesubplan”构建remotesubplan
+
+	2、针对MIN、MAX聚合函数
+		在创建min、max聚合函数的计划节点时，即函数“create_minmaxagg_plan”中会调用“make_remotesubplan”构建remotesubplan
+
+	3、构建remotescan节点相关计划
+		在创建remotescan的计划节点时，即函数“create_remotescan_plan”中会调用“make_remotesubplan”构建remotesubplan
+
+	4、在规划阶段
+		即函数“standard_planner”中会调用“make_remotesubplan”构建remotesubplan
+
+	5、构建子计划树过程中
+		即函数“make_subplan”中会调用“make_remotesubplan”构建remotesubplan
 
 
 
 
 
-
-=====第二部分===============================================execute的过程中===================================================================
+=====第二部分=============================================execute的过程中===================================================================
 创建表语句
 	create table t1 (col1 int, col2 int) distribute by hash(col1);
 	create table t2 (col3 int, col4 int) distribute by hash(col3);
@@ -104,12 +122,10 @@
 #14 0x000000000075c636 in main (argc=8, argv=0x1bedb30) at main.c:228
 
 
-
 在RemoteSubplan执行过程中，执行函数ExecRemoteSubplan进行如下处理
 	第一：获取与DN1、DN2的进程的socket连接，调用pgxc_node_send_cmd_id、pgxc_node_send_snapshot、pgxc_node_send_bind发送信息
 	第二：获取与DN1、DN2的进程的socket连接，调用pgxc_node_send_execute发送子计划执行命令，并指定最大获取的数据行数；以及调用函数pgxc_node_send_flush进行提交
 	第三：获取DN1、DN2反馈过来的数据
-
 
 
 
@@ -125,7 +141,6 @@ DN节点如同”client--server“模式中的server端，主要依据CN端发�
 	第三步：在接收到”E“命令后，依据”portal name“从名为”Portal hash“的”hash table“中查找执行计划树，并调用”PortalRun“进行执行
 		【在PortalRun执行过程中，涉及到与其它进程进行涉及数据库中数据交互时，使用pgxc_node_receive进行接收；使用printtup进行发送】
 	第四步：在接收到”C“命令后，结束执行
-
 
 
 
