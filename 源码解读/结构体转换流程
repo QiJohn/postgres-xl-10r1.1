@@ -2,17 +2,37 @@
 阶段一系列流程：一个或多个SQL语句---->结构体RawStmt组成的list
 	该阶段为parse阶段，通过函数”pg_parse_query“实现
 
+
 阶段二系列流程：结构体RawStmt---->结构体Query---->结构体Query组成的list---->结构体PlannedStmt组成的list
 	1、”结构体RawStmt---->结构体Query“为analyze阶段，通过函数”parse_analyze“实现。
 			在该函数中调用”make_parsestate“构建结构体ParseState的变量，用于存储analyze阶段的状态信息
 	2、”结构体Query---->结构体Query组成的list“为rewrite阶段，通过函数”pg_rewrite_query“实现。
-	3、”结构体Query组成的list---->结构体PlannedStmt组成的list“为optimizer阶段，通过函数”pg_plan_queries“实现；在该流程中，需要遍历”结构体Query组成的list“，并将每个”Query“转换成一个结4、构体”PlannedStmt“，通过函数”pg_plan_query-->planner-->standard_planner“实现，详细实现在函数”standard_planner“中。
+	3、”结构体Query组成的list---->结构体PlannedStmt组成的list“为optimizer阶段，通过函数”pg_plan_queries“实现；在该流程中，需要遍历”结构体Query组成的list“，并将每个”Query“转换成一个结构体”PlannedStmt“，通过函数”pg_plan_query-->planner-->standard_planner“实现，详细实现在函数”standard_planner“中。
+
 
 阶段三系列流程：结构体PlannedStmt组成的list---->结构体Portal
 	1、先构建一个空的Portal，通过函数“CreatePortal("", true, true)”完成
-	2、通过PlannedStmt对Portal进行初始化，通过函数“PortalDefineQuery”完成
+	2、将结构体PlannedStmt组成的list赋值给“Portal->stmts”，通过函数“PortalDefineQuery”完成
 
 
+阶段四系列流程：结构体Portal数据---->结构体QueryDesc
+	1、依据“Portal->stmts”构建结构体QueryDesc，使用函数“CreateQueryDesc(......)”，将“Portal->stmts”中存储的内容赋值给“QueryDesc->plannedstmt”
+	2、给结构体QueryDesc的未赋值字段进行赋值，如：
+		2.1、函数“ExecutorStart(queryDesc, 0)”处理结构体QueryDesc
+		2.2、在函数ExecutorStart中调用CreateExecutorState()构建结构体EState，并赋值给“QueryDesc->estate”；
+		2.3、在函数InitPlan中通过函数“ExecInitNode(plan, estate, eflags)”构建结构体PlanState，"PlanState->state"由“QueryDesc->estate”赋值；“PlanState->plan”由“QueryDesc->plannedstmt->planTree”赋值，存放执行计划树；返回该PlanState并赋值给“QueryDesc->planstate”
+			使用函数ExecAllocTableSlot构造“TupleTableSlot”类型的存储空间，赋值给“PlanState->ps_ResultTupleSlot”，后续用于存储执行该“PlanState”的返回结果
+			基于结构体“Plan”的树型拓扑结构(执行计划树)会被转换成对应的基于结构体“PlanState”的树型结构
+
+		2.4、使用函数CreateDestReceiver(DestProducer)创建数据接收端，并将其赋值给“QueryDesc->dest”
+			在后续计划执行过程中，即ExecutorRun过程中，需要通过“QueryDesc->dest”中存储的指针函数将数据传输到客户端或者存储到指定位置
+		2.5、将“QueryDesc”赋值给“Portal->queryDesc”
+
+	3、依据结构体QueryDesc的数据进行处理，如：
+		函数“ExecutorRun(queryDesc, ForwardScanDirection, 0L, true)”处理结构体QueryDesc
+			在"ExecutorRun->ExecutePlan->ExecProcNode"过程中，通过处理“QueryDesc->planstate”执行“执行计划树”
+		函数“ExecutorFinish(queryDesc)”处理结构体QueryDesc
+		函数“ExecutorEnd(queryDesc)”处理结构体QueryDesc
 
 
 
@@ -44,14 +64,30 @@
 		按照”MergePath *“类型查看best_path内容为：{jpath = {path = {type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000',	parallel_safe = 1 '\001', parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}, jointype = JOIN_INNER, inner_unique = 0 '\000', outerjoinpath = 0x21396e0, innerjoinpath = 0x2138560, joinrestrictinfo = 0x2139128, movedrestrictinfo = 0x0}, path_mergeclauses = 0x21393e0, outersortkeys = 0x0, innersortkeys = 0x2139440, skip_mark_restore = 0 '\000', materialize_inner = 0 '\000'}
 		按照”JoinPath *“类型查看best_path内容为：{path = {type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000', parallel_safe = 1 '\001',	parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}, jointype = JOIN_INNER,	inner_unique = 0 '\000', outerjoinpath = 0x21396e0, innerjoinpath = 0x2138560, joinrestrictinfo = 0x2139128, movedrestrictinfo = 0x0}
 
-	“流程四”通过函数“create_plan”实现（在结构体plan组成的tree上添加新的结构体plan，通过makex_xxxxplan函数实现）。plan组成的tree，及plantree_list。
+	“流程四”通过函数“create_plan”实现（在结构体plan组成的tree上添加新的结构体plan，通过makex_xxxx函数实现）。plan组成的tree，及plantree_list。
+
+
+
+
+
 
 
 
 ==========================================结构体之间关系======================================================
-结构体”PlannerInfo“的成员变量”parse“为指针，指向结构体”Query“
-结构体”PlannerInfo“的成员变量”upper_rels“为List指针数组，数组中存储为结构体”ListCell“，通过该结构体内指针变量指向结构体”RelOptInfo“
-结构体”RelOptInfo“的成员变量”cheapest_total_path“为指针，指向结构体”Path“；”pathlist“为List指针，记录着生成该RelOptInfo时在某方面较优的路径，其中每个元素最终指向结构体Path
+1、结构体”PlannerInfo“的成员变量”parse“为指针，指向结构体”Query“
+
+2、结构体”PlannerInfo“的成员变量”upper_rels“为List指针数组，数组中存储为结构体”ListCell“，通过该结构体内指针变量指向结构体”RelOptInfo“
+
+3、结构体”RelOptInfo“的成员变量”cheapest_total_path“为指针，指向结构体”Path“；”pathlist“为List指针，记录着生成该RelOptInfo时在某方面较优的路径，其中每个元素最终指向结构体Path
+
+4、结构体“RemoteSubplan“、"CteScan"、”SeqScan“、”SampleScan“等各种类型的plan，其第一个成员变量都是“Plan”类型或其第一个成员变量的第一个成员变量是“Plan”类型，故这些类型的plan都可以使用'Plan*'指针进行传递，实际使用时只需要转换成实际的类型就可以了
+
+5、结构体”RemoteSubplanState“、”ScanState“、”RemoteQueryState“、”CustomScanState“等各种类型的state，其第一个成员变量都是“PlanState”类型或其第一个成员变量的第一个成员变量是“PlanState”类型，故这些类型的state都可以使用‘PlanState*’指针进行传递，实际使用时只需要转换成实际的类型就可以了
+
+6、结构体“ProducerState”都可以使用‘DestReceiver*’指针进行传递，实际使用时只需要转换成实际的类型就可以了
+
+
+
 
 
 
@@ -59,11 +95,51 @@
 
 
 ==========================================Path构建流程=======================================================
+总流程的入口函数为“make_one_rel”
 流程一：构建基本关系的路径（即为每个基本关系的RelOptInfo结构生成路径）
-	由函数“set_base_rel_pathlists(PlannerInfo *root)”实现。在函数中，通过遍历存储在数组“PlannerInfo->simple_rel_array”中的基本关系对应的RelOptInfo结构，为其生成路径，以及将路径存储到每个RelOptInfo结构的pathlist字段中
+	由函数“set_base_rel_pathlists(PlannerInfo *root)”实现。在函数中，遍历存储在数组“PlannerInfo->simple_rel_array”中的基本关系，为每一个基本关系生成一个RelOptInfo结构，并为其生成路径，以及将路径通过add_path存储到每个RelOptInfo结构的pathlist字段中
 
 流程二：对基本关系的路径进行连接(Join操作)，从而生成最终的路径
-	由函数“make_rel_from_joinlist(PlannerInfo *root, List *joinlist)”实现。在函数中，“joinlist”中每一个节点都代表一个基本关系(RangeTblRef)，该函数获取每一个基本关系(RangeTblRef)对应的RelOptInfo，将这些RelOptInfo存储到一个list链表中，并调用动态规划算法生成包含最终路径的RelOptInfo结构，其中RelOptInfo的pathlist字段就是最终路径组成的链表
+	由函数“make_rel_from_joinlist(PlannerInfo *root, List *joinlist)”实现。在函数中，“joinlist”中每一个节点都代表一个基本关系(RangeTblRef)，依据每一个基本关系(RangeTblRef)从“PlannerInfo->simple_rel_array”获取对应的RelOptInfo，将这些RelOptInfo存储到一个list链表中，并调用动态规划算法从该list中生成包含最终路径的RelOptInfo结构，其中RelOptInfo的pathlist字段就是最终路径组成的链表
+
+
+
+
+
+
+
+==========================================Plan构建流程=======================================================
+流程一：从数组“PlannerInfo->upper_rels”中获取结构体“RelOptInfo”的数据，实现函数“fetch_upper_rel(root, UPPERREL_FINAL, NULL)”
+
+流程二：从结构体“RelOptInfo”中获取最优路径树path，如函数“get_cheapest_fractional_path(final_rel, tuple_fraction)”
+
+流程三：依据最优路径树path、完整的PlannerInfo构建执行计划树，实现函数“create_plan(root, best_path)”
+	调用函数“create_plan_recurse(root, best_path, CP_EXACT_TLIST);”递归遍历最优路径树path的每一个节点path，将每个path节点转换成对应的plan节点，从而构建执行计划树plan
+
+流程四：构建结构体PlannedStmt，将执行计划树plan赋值给PlannedStmt的字段“planTree”
+
+
+
+
+
+
+
+==========================================Plan执行流程=======================================================
+流程一：依据结构体Query构建结构体PlannedStmt，如果存在多个Query，则将构建成的多个PlannedStmt组成一个list。
+
+流程二：先构建一个空的Portal，通过函数“CreatePortal("", true, true)”完成
+
+流程三：依据PlannedStmt组成的list、原始的SQL语句，对Portal进行初始化，通过函数“PortalDefineQuery(portal, NULL, query_string, commandTag, plantree_list, NULL);”完成
+
+流程四：启动portal执行器，函数“PortalStart(portal, NULL, 0, InvalidSnapshot)”完成
+	底层主要调用函数ExecutorStart进行处理
+
+流程五：执行portal执行器，函数“PortalRun(portal, FETCH_ALL, isTopLevel, true, receiver, receiver, completionTag)”完成
+	底层主要依次调用函数ExecutorRun进行执行、ExecutorFinish完成处理、ExecutorEnd结束处理
+
+流程六：结束portal执行器，函数“PortalDrop(portal, false)”完成
+
+
 
 
 
