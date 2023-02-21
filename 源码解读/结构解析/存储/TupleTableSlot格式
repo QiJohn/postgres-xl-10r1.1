@@ -1,0 +1,70 @@
+PG中的元组有多种表现形式，如下所示：
+【flattened格式】
+	即”物理存储格式“，通过定义结构体”HeapTupleData“实现
+
+【expanded格式】
+	即”内存计算格式“，通过定义结构体”ExpandedObjectHeader“实现
+
+【执行器专用格式】
+	通过定义结构体”TupleTableSlot“实现，用于执行器执行结果的存储格式
+
+
+====================================总结==========================
+1、TupleTableSlot本身带了tts_values、tts_isnull能存数据。
+2、TupleTableSlot的衍生结构【HeapTupleTableSlot】多了个物理tuple的指针，能挂一个物理tuple，用的时候解开到tts_values、tts_isnull中。
+3、HeapTupleTableSlot的衍生结构【BufferHeapTupleTableSlot】又多了个buffer，他会和buffer关联起来，释放或materialize后时候需要把buffer释放掉。
+4、TupleTableSlot的衍生结构【MinimalTupleTableSlot】在基类的基础上了记录了物理元组tuple和mintuple，mintuple表示物理元组去掉HeapTuple头和HeapTupleHeader头之后剩下的部分：isnull/dataums，纯数据部分。
+5、TupleTableSlot的衍生结构【VirtualTupleTableSlot】就比较简单的了，只多了个char *data，用于记录任何数据，可以满足各种场景的需求。
+
+总结：
+	在该结构下”TupleTableSlot“作为基类存在，”HeapTupleTableSlot“、”BufferHeapTupleTableSlot“、”MinimalTupleTableSlot“、”VirtualTupleTableSlot“四个结构体作为派生类存在，且该四个结构体，每个结构体都定义了一套属于自己的成员函数。
+
+
+
+====================================特性==========================
+1、执行器使用TupleTableSlots组装成List在各个执行节点间传递元组数据。
+
+2、目前内置四种不同的TupleTableSlots，类型按照分配的成员函数TupleTableSlotOps来区分。
+	TTSOpsBufferHeapTuple：在buffer页面中的物理元组
+	TTSOpsHeapTuple：在palloc内存中构造的物理元组
+	TTSOpsMinimalTuple：在palloc内存中构造的“最小”物理元组（物理元组去掉事务信息）
+	TTSOpsVirtual：只有Values和NULL bitmap组成的虚拟元组（只有物理元组的后两部分）
+
+3、四种类型的说明：
+	第一、二种类似都是用于管理物理元组，区别是resource manager不同。
+	对于在buffer中拿的元组，需要一直拿着pin，直到tts对tuple的引用删除后，才可以放pin。
+	对于在内存中拿的元组，也是引用删除后才可以pfree。
+	第三种minimal永远不会保存到buffer中；没有系统列。
+	第四种virtual是一种优化，用于减少嵌套plan节点之间的物理复制；没有系统列。
+
+3、TupleTableSlot 的 values/null bitmap 数组具有双重作用：
+	对于virtual类型，这就是全部数据了。
+	对于其他类型，数组保存了从tuple解出来的数据。（注意，物理元组的values的里面有很多传引用的值，真正的值记录在物理元组中，这里只是记录了引用指针）。
+	所有的数据提取都是惰性的，避免从物理元组中重复提取数据。
+4、TupleTableSlot 也可以是empty，由 tts_flags 中设置的标志 TTS_FLAG_EMPTY 表示不包含有效数据。 对于尚未分配元组描述符的新创建的slot，empty是唯一有效的状态。 在这种状态下，不应在 tts_flags 中设置 TTS_SHOULDFREE，tts_tuple 必须为 NULL 并且 tts_nvalid 为零。
+
+5、tupleDescriptor 只是由 TupleTableSlot 代码引用，而不是复制。 ExecSetSlotDescriptor() 的调用者负责提供一个描述符，该描述符的生命周期必须与slot一样长。
+6、ts_values/tts_isnull 要么在创建槽时（提供描述符时）分配，要么在将描述符分配给槽时分配； 它们的长度等于描述符的 natts。
+7、当在 tts_flags 中设置 TTS_SHOULDFREE 时，物理元组由插槽“拥有”，并且应该在插槽对元组的引用被删除时释放。
+8、TTS_FLAG_SLOW 标志是 slot_deform_heap_tuple 的保存状态，不应被任何其他代码修改。
+
+
+
+
+==================================fill_val的入参dataP为什么是二级指针============================
+如果只有一列使用一级指针也是OK的，代码里面进入就执行了：char *data = *dataP;
+后面都在对data进行操作，这里的data和*dataP都指向内存的数据区域，最后再执行“*dataP = data”也就是让dataP重新指向data。
+但是多列时会有循环去调用fill_val函数，每次都需要调整data的位置，所以最后的”*dataP = data;“会把data的位置向后移动，来放下一个列的数据。
+-----------------------                                       <----tuple
+| HeapTuple              |
+-----------------------                                        <----td       <----tuple->t_data
+| HeapTupleHeader  |
+-----------------------
+| isnull                       |
+-----------------------                                      <----data      <----*dataP            <----td + td->thoff
+| Datums                   |           下一列数据        <----data      <----*dataP
+|                                |            下一列数据        <----data      <----*dataP
+|                                |
+-----------------------
+
+
