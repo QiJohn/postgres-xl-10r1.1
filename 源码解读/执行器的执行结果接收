@@ -1,0 +1,225 @@
+===============================================总结====================================================
+1、执行器在进入之前都会配置DestReceiver（一套接口），通过函数”CreateDestReceiver“进行配置。
+2、执行器在内部跑一遍plan tree，产生一条TupleTableSlot，执行器调用接口函数receiveSlot，按当前接口定义输出到指定位置。例如：
+	【SELECT语句】receiveSlot为printtup：把TupleTableSlot按列解析后拿到数据，按客户端服务端协议拼装包内容，调用libpq返回给客户端。
+	【COPY TO 语句】receiveSlot为copy_dest_receive：把TupleTableSlot按列解析后拿到数据，按copy语法提供的分隔符组装，fwrite到文件中。
+	【SPI语句】中receiveSlot为spi_printtup：把TupleTableSlot转换为HeapTuple格式，保存到SPI结果全局变量中。
+
+
+
+
+
+
+
+===============================================概要====================================================
+1、执行器的工作包括：执行plan Tree、获取计算结果，这里主要分析获取计算结果
+	1.1、执行器会在多种场景下工作，例如：
+		SPI调用。
+		常规客户端服务端的调用。
+		standalone backend调用（没有postmaster）。
+		系统内部调用
+
+
+	1.2、对于上述场景，执行器的调用者有较大的差异，结果集无法使用一套函数返回。所以执行器设计了一套拿结果的函数钩子（接口），调用者需要将结果集的获取函数配置到接口上，执行器在执行中会把结果通过接口函数调入相应模块中，完成调用者所需的结果集构造，例如：
+		SPI的结果需要存放到执行的全局变量结构中。
+		常规客户端服务端调用需要将结果用Libpq返回客户端。
+		standalone backend调用需要将结果打印到stdout。
+		系统内部调用不需要返回结果。
+
+
+	1.3、结果接收器DestReceiver接口定义
+		1.3.1、该结果接收器接口提供了四个接口，分别如下所示：
+			receiveSlot：输入执行器产生的TupleTableSlot，并对该TupleTableSlot进行处理，按照指定格式输出
+			rStartup：初始化结果接收器
+			rShutdown：停止结果接收器
+			rDestroy：清理动态申请中间变量
+
+		1.3.2、具体定义如下
+			struct _DestReceiver{
+				/* Called for each tuple to be output: */
+				bool		(*receiveSlot) (TupleTableSlot *slot,
+											DestReceiver *self);
+				/* Per-executor-run initialization and shutdown: */
+				void		(*rStartup) (DestReceiver *self,
+										int operation,
+										TupleDesc typeinfo);
+				void		(*rShutdown) (DestReceiver *self);
+				/* Destroy the receiver object itself (if dynamically allocated) */
+				void		(*rDestroy) (DestReceiver *self);
+				/* CommandDest code for this receiver */
+				CommandDest mydest;
+				/* Private fields might appear beyond this point... */
+			};
+
+
+	1.4、接收器DestReceiver定义的接口函数被调用情况
+		1.4.1、会调用函数”receiveSlot“的函数如下所示
+			函数”ExecutePlan“
+			函数”do_tup_output“
+			函数”producerReceiveSlot“
+			函数”PortalRun“
+
+		1.4.2、会调用函数”rStartup“的函数如下所示
+			函数”standard_ExecutorRun“
+			函数”begin_tup_output_tupdesc“
+			函数”producerStartupReceiver“
+			函数”PortalRun“
+			函数”RunFromStore“
+
+		1.4.3、会调用函数”rShutdown“的函数如下所示
+			函数”standard_ExecutorRun“
+			函数”end_tup_output“
+			函数”producerShutdownReceiver“
+			函数”PortalRun“
+			函数”RunFromStore“
+
+		1.4.4、会调用函数”rDestroy“的函数如下所示
+			函数”PersistHoldablePortal“
+			函数”ParallelQueryMain“
+			函数”postquel_end“
+			函数”producerDestroyReceiver“
+			函数”exec_simple_query“
+			函数”exec_execute_message“
+			函数”FillPortalStore“
+			函数”AdvanceProducingPortal“
+			函数”cleanupClosedProducers“
+
+
+
+
+
+
+
+
+=============================================使用场景==================================================
+1、由函数CreateDestReceiver调用接口函数printtup_create_DR进行配置
+	DestReceiver *printtup_create_DR(CommandDest dest){
+		DR_printtup *self = (DR_printtup *) palloc0(sizeof(DR_printtup));
+
+		self->pub.receiveSlot = printtup;	/* might get changed later */
+		self->pub.rStartup = printtup_startup;
+		self->pub.rShutdown = printtup_shutdown;
+		self->pub.rDestroy = printtup_destroy;
+		。。。。
+		return (DestReceiver *) self;
+	}
+	其中结构体“DR_printtup”的第一个成员变量类型即为”DestReceiver“
+
+
+
+2、由函数CreateDestReceiver调用接口函数CreateCopyDestReceiver进行配置
+	DestReceiver *CreateCopyDestReceiver(void){
+		DR_copy    *self = (DR_copy *) palloc(sizeof(DR_copy));
+
+		self->pub.receiveSlot = copy_dest_receive;
+		self->pub.rStartup = copy_dest_startup;
+		self->pub.rShutdown = copy_dest_shutdown;
+		self->pub.rDestroy = copy_dest_destroy;
+		。。。。
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“DR_copy”的第一个成员变量类型即为”DestReceiver“
+
+
+
+3、由函数接口CreateIntoRelDestReceiver配置
+	DestReceiver *CreateIntoRelDestReceiver(IntoClause *intoClause){
+		DR_intorel *self = (DR_intorel *) palloc0(sizeof(DR_intorel));
+
+		self->pub.receiveSlot = intorel_receive;
+		self->pub.rStartup = intorel_startup;
+		self->pub.rShutdown = intorel_shutdown;
+		self->pub.rDestroy = intorel_destroy;
+		。。。。
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“DR_intorel”的第一个成员变量类型即为”DestReceiver“
+
+
+
+4、由函数CreateDestReceiver调用接口函数CreateTransientRelDestReceiver进行配置
+	DestReceiver *CreateTransientRelDestReceiver(Oid transientoid){
+		DR_transientrel *self = (DR_transientrel *) palloc0(sizeof(DR_transientrel));
+
+		self->pub.receiveSlot = transientrel_receive;
+		self->pub.rStartup = transientrel_startup;
+		self->pub.rShutdown = transientrel_shutdown;
+		self->pub.rDestroy = transientrel_destroy;
+		。。。。
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“DR_transientrel”的第一个成员变量类型即为”DestReceiver“
+
+
+
+5、由函数CreateDestReceiver调用接口函数CreateSQLFunctionDestReceiver进行配置
+	DestReceiver *CreateSQLFunctionDestReceiver(void){
+		DR_sqlfunction *self = (DR_sqlfunction *) palloc0(sizeof(DR_sqlfunction));
+
+		self->pub.receiveSlot = sqlfunction_receive;
+		self->pub.rStartup = sqlfunction_startup;
+		self->pub.rShutdown = sqlfunction_shutdown;
+		self->pub.rDestroy = sqlfunction_destroy;
+		self->pub.mydest = DestSQLFunction;
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“DR_sqlfunction”的第一个成员变量类型即为”DestReceiver“
+
+
+
+6、由函数CreateDestReceiver调用接口函数CreateProducerDestReceiver进行配置
+	DestReceiver *CreateProducerDestReceiver(void){
+		ProducerState *self = (ProducerState *) palloc0(sizeof(ProducerState));
+
+		self->pub.receiveSlot = producerReceiveSlot;
+		self->pub.rStartup = producerStartupReceiver;
+		self->pub.rShutdown = producerShutdownReceiver;
+		self->pub.rDestroy = producerDestroyReceiver;
+		。。。。
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“ProducerState”的第一个成员变量类型即为”DestReceiver“
+
+
+
+7、由函数CreateDestReceiver调用接口函数CreateTupleQueueDestReceiver进行配置
+	DestReceiver *CreateTupleQueueDestReceiver(shm_mq_handle *handle){
+		TQueueDestReceiver *self;
+		self = (TQueueDestReceiver *) palloc0(sizeof(TQueueDestReceiver));
+
+		self->pub.receiveSlot = tqueueReceiveSlot;
+		self->pub.rStartup = tqueueStartupReceiver;
+		self->pub.rShutdown = tqueueShutdownReceiver;
+		self->pub.rDestroy = tqueueDestroyReceiver;
+		。。。。
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“TQueueDestReceiver”的第一个成员变量类型即为”DestReceiver“
+
+
+
+8、由函数CreateDestReceiver调用接口函数CreateTuplestoreDestReceiver进行配置
+	DestReceiver *CreateTuplestoreDestReceiver(void){
+		TStoreState *self = (TStoreState *) palloc0(sizeof(TStoreState));
+
+		self->pub.receiveSlot = tstoreReceiveSlot_notoast;	/* might change */
+		self->pub.rStartup = tstoreStartupReceiver;
+		self->pub.rShutdown = tstoreShutdownReceiver;
+		self->pub.rDestroy = tstoreDestroyReceiver;
+		self->pub.mydest = DestTuplestore;
+
+		return (DestReceiver *) self;
+	}
+	其中结构体“TStoreState”的第一个成员变量类型即为”DestReceiver“
+
+
+
+
+
+
