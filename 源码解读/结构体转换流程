@@ -59,11 +59,15 @@
 		5、结构体"PlannerInfo"的成员变量"parse"为指针，指向结构体"Query"
 		6、结构体“PlannerInfo”的成员变量“simple_rel_array”为一个数组，数组中每个元素存储基本表扫描路径对应的RelOptInfo
 		7、结构体“PlannerInfo”的成员变量“join_rel_list”为一个list，链表中每个元素存储连接路径对应的RelOptInfo
+		8、通过预处理对结构体Query进行优化处理，并依据Query构建结构体PlannerInfo中相关字段信息，如遍历结构体“Query”中成员变量“jointree”的节点，当节点类型为“RangeTblRef”时，向结构体“PlannerInfo”的成员变量“simple_rel_array”添加对应的结构体RelOptInfo
+		9、向结构体“PlannerInfo”的成员变量“sort_pathkeys”添加元组输出时的排序字段，例如将sql中排序语句“order by data”中的代表排序的字段“data”加入到“sort_pathkeys”。(Pathkey是一个向路径提供排序的数据结构)
+		10、调用函数”distribute_restrictinfo_to_rels“将where语句表示的信息添加到结构体“RelOptInfo”的成员变量“baserestrictinfo”中，例如sql语句中“where id < 10”
+		11、在结构体“PlannerInfo”中，成员变量“simple_rte_array”中存储的“RangeTblEntry”和成员变量“simple_rel_array”中存储的“RelOptInfo”，是逐一对应的，”RelOptInfo“由对应的”RangeTblEntry“转换而来
 
 
 	“流程二”通过函数“fetch_upper_rel”实现，即从结构体“PlannerInfo”的成员变量”upper_rels“中，获取结构体“RelOptInfo”的具体内容，如果“upper_rels”为空，则先构建再返回
 
-	“流程三”通过函数“get_cheapest_fractional_path”实现，即从结构体“RelOptInfo”的成员变量”pathlist“中，获取结构体”Path“的具体内容。path组成的tree
+	“流程三”通过函数“get_cheapest_fractional_path”实现，即从结构体“RelOptInfo”中，获取代价最小的path，并可以通过该path遍历整个path tree。
 		实际数据举例，best_path地址为0x2139530
 		按照”Path *“类型查看best_path内容为：{type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000', parallel_safe = 1 '\001',	parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}
 		按照”MergePath *“类型查看best_path内容为：{jpath = {path = {type = T_MergePath, pathtype = T_MergeJoin, parent = 0x21388f0, pathtarget = 0x213a2d0, param_info = 0x0, parallel_aware = 0 '\000',	parallel_safe = 1 '\001', parallel_workers = 0, rows = 25538, startup_cost = 317.01161949503773, total_cost = 711.38161949503774, pathkeys = 0x0, distribution = 0x2139778}, jointype = JOIN_INNER, inner_unique = 0 '\000', outerjoinpath = 0x21396e0, innerjoinpath = 0x2138560, joinrestrictinfo = 0x2139128, movedrestrictinfo = 0x0}, path_mergeclauses = 0x21393e0, outersortkeys = 0x0, innersortkeys = 0x2139440, skip_mark_restore = 0 '\000', materialize_inner = 0 '\000'}
@@ -145,7 +149,6 @@
 	底层主要依次调用函数ExecutorRun进行执行、ExecutorFinish完成处理、ExecutorEnd结束处理
 
 流程六：结束portal执行器，函数“PortalDrop(portal, false)”完成
-
 
 
 
