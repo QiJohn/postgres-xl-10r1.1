@@ -141,8 +141,72 @@
 
 
 
-
-
+------------------------------------------------------------------------------------------
+0x21bd8f8{
+  type = T_RelOptInfo,
+  reloptkind = RELOPT_UPPER_REL,
+  relids = 0x0,
+  rows = 0,
+  consider_startup = false,
+  consider_param_startup = false,
+  consider_parallel = true,
+  reltarget = 0x21bdb08,
+  pathlist = 0x21bdbc8,     /*path = 0x21bd818 path = {type = T_SortPath, pathtype = T_Sort...}，subpath = 0x21bd468}}
+  			    subpath = 0x21bd468   path = {type = T_AggPath, pathtype = T_Agg...}, subpath = 0x21bcc58...}}
+			    subpath = 0x21bcc58   path = {type = T_HashPath, pathtype = T_HashJoin...}, jointype = JOIN_INNER, outerjoinpath = 0x21bbb08, innerjoinpath = 0x21bb9d8...}}
+			    outerjoinpath = 0x21bbb08  path = {type = T_Path, pathtype = T_SeqScan...}
+			    innerjoinpath = 0x21bb9d8  path = {type = T_Path, pathtype = T_SeqScan...}*/
+  ppilist = 0x0,
+  partial_pathlist = 0x0,
+  cheapest_startup_path = 0x21bd818,
+  cheapest_total_path = 0x21bd818,
+  cheapest_unique_path = 0x0,
+  cheapest_parameterized_paths = 0x21bdc18,
+  direct_lateral_relids = 0x0,
+  lateral_relids = 0x0,
+  relid = 0,
+  reltablespace = 0,
+  rtekind = RTE_RELATION,
+  min_attr = 0,
+  max_attr = 0,
+  attr_needed = 0x0,
+  attr_widths = 0x0,
+  lateral_vars = 0x0,
+  lateral_referencers = 0x0,
+  indexlist = 0x0,
+  statlist = 0x0,
+  pages = 0,
+  tuples = 0,
+  allvisfrac = 0,
+  subroot = 0x0,
+  subplan_params = 0x0,
+  rel_parallel_workers = 0,
+  serverid = 0,
+  userid = 0,
+  useridiscurrent = false,
+  fdwroutine = 0x0,
+  fdw_private = 0x0,
+  unique_for_rels = 0x0,
+  non_unique_for_rels = 0x0,
+  baserestrictinfo = 0x0,
+  baserestrictcost = {
+    startup = 0,
+    per_tuple = 0
+  },
+  baserestrict_min_security = 0,
+  joininfo = 0x0,
+  has_eclass_joins = false,
+  consider_partitionwise_join = false,
+  top_parent_relids = 0x0,
+  part_scheme = 0x0,
+  nparts = 0,
+  boundinfo = 0x0,
+  partition_qual = 0x0,
+  part_rels = 0x0,
+  partexprs = 0x0,
+  nullable_partexprs = 0x0,
+  partitioned_child_rels = 0x0
+}
 
 
 
