@@ -22,6 +22,24 @@
 	对进程号xxxx进行函数运行监控：perf record -e cpu-clock -g -p xxxxx
 	展示监控的信息：perf report
 
+5、== == == == == = gdb+tui调试过程中cmd日志输出
+	在gdb调试时使用tui进行多窗口输出时，cmd中的输出经常无法上下浏览，因此可以使用日志方式实现浏览
+	在/home/zq目录下输入命令“gdb   --pid=进程号   -tui”开启gdb
+	在gdb调试窗口的cmd下"set logging on"开启日志，并在/home/zq目录下新建gdb.txt日志文件
+	在/home/zq目录下输入命令“tail  -f  gdb.txt”即可查看gdb调试过程中cmd窗口的所有输出内容，包括“print   xxxxx”的结果
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
