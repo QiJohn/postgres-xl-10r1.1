@@ -1,0 +1,158 @@
+{
+  type = T_PlannerInfo,
+  parse = 0x27ae890,
+  glob = 0x27aedc8,
+......
+  simple_rel_array = 0x27d2688,    存储的RelOptInfo have 0x27d0d78、0x27d27f8
+  simple_rel_array_size = 3,
+  simple_rte_array = 0x27d26b8,
+  append_rel_array = 0x0,
+  all_baserels = 0x2866b28,
+  nullable_baserels = 0x0,
+  join_rel_list = 0x2867718,      存储的RelOptInfo have 0x2866158
+......
+  upper_rels = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2867f78},     0x2867f78 存储的RelOptInfo address is 0x2867058
+  upper_targets = {0x0, 0x0, 0x2867da8, 0x2867da8, 0x2867da8, 0x2867da8, 0x2867da8},
+......
+}
+
+地址为0x2866158的RelOptInfo{
+  type = T_RelOptInfo,
+  reloptkind = RELOPT_JOINREL,
+  relids = 0x2866ed8,
+  ......
+  pathlist = 0x2867a48,      list中存储T_HashPath类型的Path，地址为：0x2867ce8
+  ppilist = 0x0,
+  cheapest_startup_path = 0x2867ce8,
+  cheapest_total_path = 0x2867ce8,     类型为HashJoin的Path
+  cheapest_unique_path = 0x0,
+  cheapest_parameterized_paths = 0x2867ed8,
+  rtekind = RTE_JOIN,
+  ......
+}
+
+地址为0x2867058的RelOptInfo{
+  type = T_RelOptInfo,
+  reloptkind = RELOPT_UPPER_REL,
+  relids = 0x0,
+ ......
+  reltarget = 0x2867f08,
+  pathlist = 0x2867fc8,    list中存储T_HashPath类型的Path，地址为：0x2867ce8
+  cheapest_startup_path = 0x2867ce8,
+  cheapest_total_path = 0x2867ce8,             类型为HashJoin的Path
+  cheapest_unique_path = 0x0,
+  cheapest_parameterized_paths = 0x2868018,
+  rtekind = RTE_RELATION,
+  ......
+}
+
+地址为0x27d0d78的RelOptInfo{
+  type = T_RelOptInfo,
+  reloptkind = RELOPT_BASEREL,
+  relids = 0x27d26e8,
+  rows = 183,
+  ......
+  pathlist = 0x2866af8,    list中存储T_Path类型的Path，地址为：0x27d2ae8
+  ppilist = 0x0,
+  cheapest_startup_path = 0x27d2ae8,
+  cheapest_total_path = 0x27d2ae8,     类型为SeqScan的Path
+  cheapest_unique_path = 0x0,
+  cheapest_parameterized_paths = 0x2866d48,
+  rtekind = RTE_RELATION,
+  ......
+}
+
+地址为0x27d27f8的RelOptInfo{
+  type = T_RelOptInfo,
+  reloptkind = RELOPT_BASEREL,
+  relids = 0x27d2a08,
+  rows = 2260,
+ ......
+  reltarget = 0x27d27a8,
+  pathlist = 0x2866d98,    list中存储T_Path类型的Path，地址为：0x2866878
+  cheapest_startup_path = 0x2866878,
+  cheapest_total_path = 0x2866878,           类型为SeqScan的Path
+  cheapest_unique_path = 0x0,
+  cheapest_parameterized_paths = 0x2866de8,
+  rtekind = RTE_RELATION,
+  ......
+}
+
+
+地址为0x2866878的Path{
+  type = T_Path,
+  pathtype = T_SeqScan,
+  parent = 0x27d27f8,
+  pathtarget = 0x27d27a8,
+  param_info = 0x0,
+  parallel_aware = false,
+  parallel_safe = true,
+  parallel_workers = 0,
+  rows = 2260,
+  startup_cost = 0,
+  total_cost = 32.600000000000001,
+  pathkeys = 0x0
+}
+
+
+地址为0x27d2ae8的Path{
+  type = T_Path,
+  pathtype = T_SeqScan,
+  parent = 0x27d0d78,
+  pathtarget = 0x27d2708,
+  param_info = 0x0,
+  parallel_aware = false,
+  parallel_safe = true,
+  parallel_workers = 0,
+  rows = 183,
+  startup_cost = 0,
+  total_cost = 16.875,
+  pathkeys = 0x0
+}
+
+
+地址为0x2867ce8的HashJoin类型的Path{
+  jpath = {
+    path = {
+      type = T_HashPath,
+	  pathtype = T_HashJoin,
+	  parent = 0x2866158,
+	  pathtarget = 0x2866b98,
+	  param_info = 0x0,
+	  parallel_aware = false,
+	  parallel_safe = true,
+	  parallel_workers = 0,
+	  rows = 2068,
+	  startup_cost = 19.162500000000001,
+	  total_cost = 128.9425,
+	  pathkeys = 0x0
+    },
+    jointype = JOIN_INNER,
+    inner_unique = false,
+    outerjoinpath = 0x2866878,         指向地址为0x2866878、类型为SeqScan的Path
+    innerjoinpath = 0x27d2ae8,         指向地址为0x27d2ae8、类型为SeqScan的Path
+    joinrestrictinfo = 0x2865228
+  },
+  path_hashclauses = 0x28658a8,
+  num_batches = 1,
+  inner_rows_total = 183
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
