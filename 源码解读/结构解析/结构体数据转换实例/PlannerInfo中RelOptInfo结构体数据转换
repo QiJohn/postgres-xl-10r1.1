@@ -152,10 +152,10 @@
   consider_parallel = true,
   reltarget = 0x21bdb08,
   pathlist = 0x21bdbc8,     /*path = 0x21bd818 path = {type = T_SortPath, pathtype = T_Sort...}，subpath = 0x21bd468}}
-  			    subpath = 0x21bd468   path = {type = T_AggPath, pathtype = T_Agg...}, subpath = 0x21bcc58...}}
-			    subpath = 0x21bcc58   path = {type = T_HashPath, pathtype = T_HashJoin...}, jointype = JOIN_INNER, outerjoinpath = 0x21bbb08, innerjoinpath = 0x21bb9d8...}}
-			    outerjoinpath = 0x21bbb08  path = {type = T_Path, pathtype = T_SeqScan...}
-			    innerjoinpath = 0x21bb9d8  path = {type = T_Path, pathtype = T_SeqScan...}*/
+  			    							subpath = 0x21bd468   path = {type = T_AggPath, pathtype = T_Agg...}, subpath = 0x21bcc58...}}
+			    							subpath = 0x21bcc58   path = {type = T_HashPath, pathtype = T_HashJoin...}, jointype = JOIN_INNER, outerjoinpath = 0x21bbb08, innerjoinpath = 0x21bb9d8...}}
+			    							outerjoinpath = 0x21bbb08  path = {type = T_Path, pathtype = T_SeqScan...}
+			    							innerjoinpath = 0x21bb9d8  path = {type = T_Path, pathtype = T_SeqScan...}*/
   ppilist = 0x0,
   partial_pathlist = 0x0,
   cheapest_startup_path = 0x21bd818,
