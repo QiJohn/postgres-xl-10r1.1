@@ -51,20 +51,29 @@
 其中：
 	“流程一”通过函数“subquery_planner”实现，在该阶段构建path、RelOptInfo，并进一步包装成PlannerInfo
 		1、在函数“subquery_planner”中先通过“makeNode(PlannerInfo)”创建“PlannerInfo”
-		2、通过”grouping_planner-->query_planner"来调用函数”make_one_rel“创建“RelOptInfo”，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
+
+		2、预处理阶段(进行优化处理)
+			2.1、add_base_rels_to_query函数遍历jointree，将搜索到的RangeTblEntry类型节点添加到“PlannerInfo->simple_rel_array”中
+			2.2、deconstruct_jointree及distribute_qual_to_rels函数会将Mergejoinable的外连接约束语句依照其不同的类型分别保存到PlannerInfo的left_join_clauses、right_join_clauses、full_join_clauses中。即通过分析jointree中的约束qual，来构建baser rel之间的join信息
+			2.3、reconsider_outer_join_clauses函数对left_join_clauses、right_join_clauses、full_join_clauses进行分类处理，从而“推导”出新的以EquivalenceClass表示的知识
+			2.4、generate_base_implied_equalities函数将“推导”出新的以EquivalenceClass表示的知识“实例化”成RestrictInfo，并绑定到对应base rel的RelOptInfo中
+			2.5、set_base_rel_sizes函数为每个base rel设置物理参数，包括选择率、获取的tuple数目等
+
+
+		3、通过”grouping_planner-->query_planner"来调用函数”make_one_rel“创建“RelOptInfo”，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
 			或，构建join类型“RelOptInfo”，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
 			或，从结构体“PlannerInfo“的“simple_rel_array”获取”RelOptInfo“，并通过函数“add_path”向“RelOptInfo”添加构建的“Path”；
-		3、将某方面较优的路径存放到结构体"RelOptInfo"的成员变量”pathlist“中，该”pathlist“为List指针，其中每个元素最终指向一个Path结构体
-		4、将存储将代价最小的路径的结构体"RelOptInfo"，存放到结构体“PlannerInfo”的成员变量”upper_rels“中
-		5、结构体"PlannerInfo"的成员变量"parse"为指针，指向结构体"Query"
-		6、结构体“PlannerInfo”的成员变量“simple_rel_array”为一个数组，数组中每个元素存储基本表扫描路径对应的RelOptInfo，RelOptInfo类型为“RELOPT_BASEREL”，其cheapest_total_path类型为“SeqScan”
-		7、结构体“PlannerInfo”的成员变量“join_rel_list”为一个list，链表中每个元素存储连接路径对应的RelOptInfo，例如，RelOptInfo类型为“RELOPT_JOINREL”，其cheapest_total_path类型为“HashPath”
-		8、结构体“PlannerInfo”的成员变量“upper_rels”为一个数组，数组中每个成员类型为RelOptInfo，表示代表执行路径信息的RelOptInfo，例如RelOptInfo类型为“RELOPT_UPPER_REL”，其cheapest_total_path类型为“HashPath”
-		9、通过预处理对结构体Query进行优化处理，并依据Query构建结构体PlannerInfo中相关字段信息，如遍历结构体“Query”中成员变量“jointree”的节点，当节点类型为“RangeTblRef”时，向结构体“PlannerInfo”的成员变量“simple_rel_array”添加对应的结构体RelOptInfo
-		10、向结构体“PlannerInfo”的成员变量“sort_pathkeys”添加元组输出时的排序字段，例如将sql中排序语句“order by data”中的代表排序的字段“data”加入到“sort_pathkeys”。(Pathkey是一个向路径提供排序的数据结构)
-		11、调用函数”distribute_restrictinfo_to_rels“将where语句表示的信息添加到结构体“RelOptInfo”的成员变量“baserestrictinfo”中，例如sql语句中“where id < 10”
-		12、在结构体“PlannerInfo”中，成员变量“simple_rte_array”中存储的“RangeTblEntry”和成员变量“simple_rel_array”中存储的“RelOptInfo”，是逐一对应的，”RelOptInfo“由对应的”RangeTblEntry“转换而来
-		13、构建完基于join类型的path节点后，继续构建基于sort、agg等类型的path，如下拓扑结构的path(先构建基表的SeqScan类型path；再构建连接基表的HashJoin类型的path，最后依次构建Agg、Sort等类型的path，最终组成一个path tree)
+		4、将某方面较优的路径存放到结构体"RelOptInfo"的成员变量”pathlist“中，该”pathlist“为List指针，其中每个元素最终指向一个Path结构体
+		5、将存储将代价最小的路径的结构体"RelOptInfo"，存放到结构体“PlannerInfo”的成员变量”upper_rels“中
+		6、结构体"PlannerInfo"的成员变量"parse"为指针，指向结构体"Query"
+		7、结构体“PlannerInfo”的成员变量“simple_rel_array”为一个数组，数组中每个元素存储基本表扫描路径对应的RelOptInfo，RelOptInfo类型为“RELOPT_BASEREL”，其cheapest_total_path类型为“SeqScan”
+		8、结构体“PlannerInfo”的成员变量“join_rel_list”为一个list，链表中每个元素存储连接路径对应的RelOptInfo，例如，RelOptInfo类型为“RELOPT_JOINREL”，其cheapest_total_path类型为“HashPath”
+		9、结构体“PlannerInfo”的成员变量“upper_rels”为一个数组，数组中每个成员类型为RelOptInfo，表示代表执行路径信息的RelOptInfo，例如RelOptInfo类型为“RELOPT_UPPER_REL”，其cheapest_total_path类型为“HashPath”
+		10、通过预处理对结构体Query进行优化处理，并依据Query构建结构体PlannerInfo中相关字段信息，如遍历结构体“Query”中成员变量“jointree”的节点，当节点类型为“RangeTblRef”时，向结构体“PlannerInfo”的成员变量“simple_rel_array”添加对应的结构体RelOptInfo
+		11、向结构体“PlannerInfo”的成员变量“sort_pathkeys”添加元组输出时的排序字段，例如将sql中排序语句“order by data”中的代表排序的字段“data”加入到“sort_pathkeys”。(Pathkey是一个向路径提供排序的数据结构)
+		12、调用函数”distribute_restrictinfo_to_rels“将where语句表示的信息添加到结构体“RelOptInfo”的成员变量“baserestrictinfo”中，例如sql语句中“where id < 10”
+		13、在结构体“PlannerInfo”中，成员变量“simple_rte_array”中存储的“RangeTblEntry”和成员变量“simple_rel_array”中存储的“RelOptInfo”，是逐一对应的，”RelOptInfo“由对应的”RangeTblEntry“转换而来
+		14、构建完基于join类型的path节点后，继续构建基于sort、agg等类型的path，如下拓扑结构的path(先构建基表的SeqScan类型path；再构建连接基表的HashJoin类型的path，最后依次构建Agg、Sort等类型的path，最终组成一个path tree)
 				path = 0x21bd818 path = {type = T_SortPath, pathtype = T_Sort...}，subpath = 0x21bd468}}
   				subpath = 0x21bd468   path = {type = T_AggPath, pathtype = T_Agg...}, subpath = 0x21bcc58...}}
 			    subpath = 0x21bcc58   path = {type = T_HashPath, pathtype = T_HashJoin...}, jointype = JOIN_INNER, outerjoinpath = 0x21bbb08, innerjoinpath = 0x21bb9d8...}}
